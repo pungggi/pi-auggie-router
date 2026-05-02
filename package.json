@@ -1,0 +1,50 @@
+{
+  "name": "pi-auggie-router",
+  "version": "1.0.0",
+  "description": "Opinionated sub-agent router for Pi: tightly couples SKILL.md execution with the Augment Code (auggie) Context Engine.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rimraf dist",
+    "test": "node --test --test-reporter=spec --import tsx tests/**/*.test.ts",
+    "lint": "tsc --noEmit -p tsconfig.json",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "keywords": [
+    "pi",
+    "pi-framework",
+    "auggie",
+    "augment",
+    "claude",
+    "mcp",
+    "skill",
+    "subagent",
+    "router"
+  ],
+  "engines": {
+    "node": ">=20.6.0"
+  },
+  "dependencies": {
+    "gray-matter": "^4.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "rimraf": "^5.0.5",
+    "tsx": "^4.21.0",
+    "typescript": "^5.4.0"
+  },
+  "license": "MIT"
+}

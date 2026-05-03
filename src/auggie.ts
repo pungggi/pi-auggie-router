@@ -44,9 +44,10 @@ export function redactSecrets(text: string): string {
 }
 
 export function runAuggieStatus(
-  settings: Pick<RouterSettings, "auggieBinPath">,
+  settings?: Pick<RouterSettings, "auggieBinPath">,
   timeoutMs = 5_000
 ): Promise<PreflightResult> {
+  const binPath = settings?.auggieBinPath ?? "auggie";
   return new Promise((resolve) => {
     let resolved = false;
     const finish = (res: PreflightResult) => {
@@ -57,7 +58,7 @@ export function runAuggieStatus(
 
     let child;
     try {
-      child = spawn(settings.auggieBinPath, ["status"], {
+      child = spawn(binPath, ["status"], {
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (err) {

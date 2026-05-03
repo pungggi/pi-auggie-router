@@ -187,14 +187,16 @@ async function callWithTimeout(
       resolve({ text: "", timedOut: true });
     }, timeoutMs);
   });
-  const callPromise = host
-    .callLLM({ ...opts, signal: ctrl.signal })
-    .then((r) => ({ text: r.text, timedOut: false as const }))
-    .catch((err: unknown) => {
-      if (ctrl.signal.aborted) return { text: "", timedOut: true as const };
-      throw err;
-    });
+  let callPromise: Promise<{ text: string; timedOut: boolean }> =
+    Promise.resolve({ text: "", timedOut: false });
   try {
+    callPromise = host
+      .callLLM({ ...opts, signal: ctrl.signal })
+      .then((r) => ({ text: r.text, timedOut: false as const }))
+      .catch((err: unknown) => {
+        if (ctrl.signal.aborted) return { text: "", timedOut: true as const };
+        throw err;
+      });
     return await Promise.race([callPromise, timeoutPromise]);
   } finally {
     if (timer) clearTimeout(timer);

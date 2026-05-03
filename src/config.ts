@@ -40,7 +40,7 @@ function assertNumber(val: unknown, key: string): number {
 
 function assertInt(val: unknown, key: string, min: number, max: number): number {
   const n = assertNumber(val, key);
-  if (!Number.isFinite(n) || n < min || n > max) {
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < min || n > max) {
     throw new Error(
       `auggieRouter.${key}: must be a finite integer between ${min} and ${max}, got ${n}`
     );
@@ -56,16 +56,22 @@ function assertNonEmptyString(val: unknown, key: string): string {
   return s;
 }
 
-function assertStringArray(val: unknown, key: string): string[] {
+function assertNonEmptyStringArray(val: unknown, key: string): string[] {
   if (!Array.isArray(val)) {
     throw new Error(`auggieRouter.${key}: expected string[], got ${typeof val}`);
   }
+  const result: string[] = [];
   for (let i = 0; i < val.length; i++) {
-    if (typeof val[i] !== "string") {
-      throw new Error(`auggieRouter.${key}[${i}]: expected string, got ${typeof val[i]}`);
+    const item = val[i];
+    if (typeof item !== "string") {
+      throw new Error(`auggieRouter.${key}[${i}]: expected string, got ${typeof item}`);
     }
+    if (!item.trim()) {
+      throw new Error(`auggieRouter.${key}[${i}]: must be a non-empty string`);
+    }
+    result.push(item.trim());
   }
-  return val as string[];
+  return result;
 }
 
 /**
@@ -140,6 +146,9 @@ function validateSettings(
   if ("subAgentTemperature" in raw) {
     try {
       const t = assertNumber(raw.subAgentTemperature, "subAgentTemperature");
+      if (!Number.isFinite(t)) {
+        throw new Error("auggieRouter.subAgentTemperature: must be a finite number");
+      }
       if (t < 0 || t > 2) {
         throw new Error("auggieRouter.subAgentTemperature: must be between 0 and 2");
       }
@@ -164,7 +173,7 @@ function validateSettings(
   }
   if ("allowedProviderPrefixes" in raw) {
     try {
-      out.allowedProviderPrefixes = assertStringArray(raw.allowedProviderPrefixes, "allowedProviderPrefixes");
+      out.allowedProviderPrefixes = assertNonEmptyStringArray(raw.allowedProviderPrefixes, "allowedProviderPrefixes");
     } catch (e) {
       warnings.push((e as Error).message);
     }
@@ -187,6 +196,13 @@ export function loadSettings(host: PiHost): RouterSettings {
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as PiSettingsFile;
     const raw = parsed.auggieRouter ?? {};
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      log(
+        "warn",
+        `pi-auggie-router: auggieRouter in .pi/settings.json must be an object, got ${Array.isArray(raw) ? "array" : typeof raw}; using defaults.`
+      );
+      return { ...DEFAULT_SETTINGS };
+    }
     const validated = validateSettings(
       raw as Record<string, unknown>,
       log as (level: "debug" | "info" | "warn" | "error", msg: string) => void

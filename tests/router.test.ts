@@ -18,11 +18,23 @@ interface HarnessOpts {
   preflightDetail?: string;
   subAgentResult?: SubAgentResult;
   history?: ChatMessage[];
+  /** Override settings via .pi/settings.json. */
+  settingsOverride?: Record<string, unknown>;
+  /** When set, callLLM resolves after this many ms — and respects abort. */
+  llmDelayMs?: number;
 }
 
 function harness(opts: HarnessOpts) {
   const workspace = mkdtempSync(join(tmpdir(), "pi-router-ws-"));
   const home = mkdtempSync(join(tmpdir(), "pi-router-home-"));
+
+  if (opts.settingsOverride) {
+    mkdirSync(join(workspace, ".pi"), { recursive: true });
+    writeFileSync(
+      join(workspace, ".pi", "settings.json"),
+      JSON.stringify({ auggieRouter: opts.settingsOverride })
+    );
+  }
 
   const messages: { kind: "system" | "assistant"; text: string }[] = [];
   const lockEvents: { locked: boolean; reason?: string }[] = [];
@@ -42,6 +54,15 @@ function harness(opts: HarnessOpts) {
       llmCalls.push(o);
       const t = opts.llmResponses[i] ?? "";
       i += 1;
+      if (opts.llmDelayMs && opts.llmDelayMs > 0) {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, opts.llmDelayMs);
+          o.signal?.addEventListener("abort", () => {
+            clearTimeout(timer);
+            reject(new Error("aborted"));
+          });
+        });
+      }
       return { text: t };
     },
     runSubAgent: async (o) => {
@@ -226,6 +247,142 @@ describe("createRouter end-to-end", () => {
       // Non-skill input is left alone.
       const passthrough = h.fireInput("hello world");
       assert.equal(passthrough, undefined);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("router.trigger throws on input that doesn't match the /skill: regex", async () => {
+    const h = harness({ llmResponses: [] });
+    try {
+      const router = createRouter(h.host, { preflight: h.preflight });
+      // `..` contains a `.`, which the chat regex rejects up-front.
+      await assert.rejects(() => router.trigger("/skill:../etc"));
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("truncates long auggie stderr in the system error message", async () => {
+    const h = harness({
+      llmResponses: [...PASSING_LLM_PAIR],
+      preflightOk: false,
+      preflightDetail: "x".repeat(1000) + "\nsecret-token-abcdef",
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+      const err = h.messages.find((m) =>
+        m.text.includes("Augment daemon is offline")
+      );
+      assert.ok(err);
+      // Truncated to 200 chars and newlines collapsed.
+      assert.ok(
+        err!.text.length < 400,
+        `expected truncated message, got ${err!.text.length} chars`
+      );
+      assert.ok(!err!.text.includes("\n\n"));
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("times out the Q&A wait after qaTimeoutMs and unlocks the router", async () => {
+    const failingPair = [
+      JSON.stringify({ userGoal: "", constraints: [], knownContext: "" }),
+      JSON.stringify({
+        hasUserGoal: false,
+        hasRequiredInputs: false,
+        hasScopeBoundary: false,
+        isUnambiguous: false,
+        missingRequirementQuestion: "Which file?",
+      }),
+    ];
+    const h = harness({
+      llmResponses: [...failingPair, ...failingPair],
+      settingsOverride: { qaTimeoutMs: 25 },
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      const cancelled = h.messages.find((m) => m.text.includes("Q&A timed out"));
+      assert.ok(cancelled, "expected timeout system message");
+      assert.equal(h.subAgentCalls.length, 0);
+
+      // Router must be free to accept a new skill afterwards.
+      writeSkill(h.workspace, "demo2", "Do it.");
+      // reset the harness LLM cursor by reusing the same mock — `i` keeps
+      // counting, so feed enough responses up front by using a fresh harness
+      // is cleaner for true follow-up tests; here we just assert idle.
+      assert.deepEqual(
+        h.lockEvents.map((e) => e.locked),
+        [],
+        "input should never have been locked because execution did not start"
+      );
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("a second user message during Q&A resume falls through (race guard)", async () => {
+    const failingPair = [
+      JSON.stringify({ userGoal: "", constraints: [], knownContext: "" }),
+      JSON.stringify({
+        hasUserGoal: false,
+        hasRequiredInputs: false,
+        hasScopeBoundary: false,
+        isUnambiguous: false,
+        missingRequirementQuestion: "Which file?",
+      }),
+    ];
+    const h = harness({
+      llmResponses: [...failingPair, ...failingPair],
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      const triggered = router.trigger("/skill:demo");
+      await new Promise((r) => setImmediate(r));
+
+      const first = h.fireBefore("src/utils.ts");
+      assert.deepEqual(first, { cancel: true });
+
+      // Second message arrives in the same tick; must NOT be swallowed.
+      const second = h.fireBefore("but actually nevermind");
+      assert.deepEqual(second, { cancel: false });
+
+      await triggered;
+      assert.equal(h.subAgentCalls.length, 1);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("aborts an Actor LLM call that exceeds routingTimeoutMs", async () => {
+    const h = harness({
+      llmResponses: [...PASSING_LLM_PAIR, ...PASSING_LLM_PAIR],
+      // Cap Q&A too so the test doesn't hang on the fallback prompt.
+      settingsOverride: { routingTimeoutMs: 25, qaTimeoutMs: 25 },
+      llmDelayMs: 200,
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      // Both passes time out → judge fallback rubric → Q&A surfaces.
+      const ask = h.messages.find((m) =>
+        m.text.includes("Missing context for skill")
+      );
+      assert.ok(ask);
+      assert.match(ask!.text, /Routing model timed out/);
+
+      // The router should have walked the loop with abort signals attached.
+      assert.ok(h.llmCalls.length >= 2);
+      assert.ok(h.llmCalls.every((c) => c.signal !== undefined));
     } finally {
       h.cleanup();
     }

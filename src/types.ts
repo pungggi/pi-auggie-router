@@ -104,6 +104,10 @@ export interface RouterSettings {
   historyWindow: number;
   /** Max iterations of the 2-pass loop. */
   maxJudgeIterations: number;
+  /** Per-call timeout for Actor / Judge routing-LLM calls, ms. */
+  routingTimeoutMs: number;
+  /** Maximum time to wait for the user's Q&A clarification reply, ms. */
+  qaTimeoutMs: number;
   /** Total sub-agent execution cap, ms. */
   totalTimeoutMs: number;
   /** MCP/tool inactivity cap, ms. */

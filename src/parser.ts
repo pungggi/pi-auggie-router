@@ -4,6 +4,7 @@ import matter from "gray-matter";
 import type { ParsedSkill, PiHost } from "./types.js";
 
 export const SKILL_COMMAND_REGEX = /^\/skill:([a-zA-Z0-9_-]+)\b/;
+const VALID_SKILL_NAME = /^[a-zA-Z0-9_-]+$/;
 
 export interface SkillCommandMatch {
   name: string;
@@ -26,12 +27,28 @@ export class SkillNotFoundError extends Error {
   }
 }
 
+export class InvalidSkillNameError extends Error {
+  constructor(public readonly skillName: string) {
+    super(
+      `Invalid skill name "${skillName}"; must match [a-zA-Z0-9_-]+ (no path separators).`
+    );
+    this.name = "InvalidSkillNameError";
+  }
+}
+
 /**
  * Look up a SKILL.md file in the workspace, then in the user's home dir.
  * Per PRD §2.1 we check `.pi/skills/<name>/SKILL.md` first, then
  * `~/.pi/agent/skills/<name>/SKILL.md`.
+ *
+ * The `skillName` is validated against `[a-zA-Z0-9_-]+` to close path
+ * traversal via the public API (the chat-input regex already enforces
+ * this, but `loadSkill` / `locateSkillFile` are exported).
  */
 export function locateSkillFile(host: PiHost, skillName: string): string {
+  if (!VALID_SKILL_NAME.test(skillName)) {
+    throw new InvalidSkillNameError(skillName);
+  }
   const candidates = [
     host.resolveWorkspacePath(join(".pi", "skills", skillName, "SKILL.md")),
     host.resolveHomePath(join(".pi", "agent", "skills", skillName, "SKILL.md")),

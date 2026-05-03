@@ -42,7 +42,7 @@ describe("RouterState", () => {
     assert.throws(() => s.beginEvaluation());
   });
 
-  it("transitions evaluating -> waitingForUser -> executing", () => {
+  it("transitions evaluating -> waitingForUser -> resuming -> executing", () => {
     const s = new RouterState();
     s.beginEvaluation();
     const p = makePending();
@@ -50,8 +50,35 @@ describe("RouterState", () => {
     assert.equal(s.phase, "waitingForUser");
     s.consumeUserAnswer("the answer");
     assert.equal(p.resolved, "the answer");
+    assert.equal(s.phase, "resuming");
     s.beginExecution();
     assert.equal(s.phase, "executing");
+  });
+
+  it("consumeUserAnswer is single-shot — second call throws", () => {
+    const s = new RouterState();
+    s.beginEvaluation();
+    const p = makePending();
+    s.beginWaitForUser(p as any);
+    s.consumeUserAnswer("first");
+    assert.throws(() => s.consumeUserAnswer("second"));
+  });
+
+  it("rejectPending(reason) resolves the pending Q&A as rejected and returns to idle", () => {
+    const s = new RouterState();
+    s.beginEvaluation();
+    const p = makePending();
+    s.beginWaitForUser(p as any);
+    s.rejectPending(new Error("timed out"));
+    assert.equal(s.phase, "idle");
+    assert.ok(p.rejected instanceof Error);
+    assert.equal(p.rejected!.message, "timed out");
+  });
+
+  it("rejectPending is a no-op when nothing is pending", () => {
+    const s = new RouterState();
+    s.rejectPending(new Error("no-op"));
+    assert.equal(s.phase, "idle");
   });
 
   it("forbids beginExecution from idle", () => {

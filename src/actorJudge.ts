@@ -133,6 +133,33 @@ function coerceRubric(raw: unknown): JudgeRubric {
 }
 
 /**
+ * Race the routing-LLM call against `routingTimeoutMs`. On timeout we abort
+ * the request (so the host can stop billing) and resolve with empty text,
+ * which the caller's coerce* fallbacks turn into a "missing context" rubric.
+ */
+async function callWithTimeout(
+  host: PiHost,
+  opts: Parameters<PiHost["callLLM"]>[0],
+  timeoutMs: number
+): Promise<{ text: string; timedOut: boolean }> {
+  if (timeoutMs <= 0) {
+    const r = await host.callLLM(opts);
+    return { text: r.text, timedOut: false };
+  }
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const r = await host.callLLM({ ...opts, signal: ctrl.signal });
+    return { text: r.text, timedOut: false };
+  } catch (err) {
+    if (ctrl.signal.aborted) return { text: "", timedOut: true };
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Run the 2-pass Actor/Judge loop. Returns the final brief + judge verdict.
  * Caller decides what to do when `passed === false` (typically: trigger Q&A).
  */
@@ -159,12 +186,16 @@ export async function runActorJudgeLoop(
   };
 
   for (let i = 1; i <= settings.maxJudgeIterations; i++) {
-    const actorRes = await host.callLLM({
-      model: settings.routingModel,
-      messages: buildActorMessages(skill, history, priorBrief, priorRubric),
-      temperature: 0.0,
-      responseFormat: "json",
-    });
+    const actorRes = await callWithTimeout(
+      host,
+      {
+        model: settings.routingModel,
+        messages: buildActorMessages(skill, history, priorBrief, priorRubric),
+        temperature: 0.0,
+        responseFormat: "json",
+      },
+      settings.routingTimeoutMs
+    );
 
     let brief: SkillBrief;
     try {
@@ -180,12 +211,16 @@ export async function runActorJudgeLoop(
       };
     }
 
-    const judgeRes = await host.callLLM({
-      model: settings.routingModel,
-      messages: buildJudgeMessages(skill, history, brief),
-      temperature: 0.0,
-      responseFormat: "json",
-    });
+    const judgeRes = await callWithTimeout(
+      host,
+      {
+        model: settings.routingModel,
+        messages: buildJudgeMessages(skill, history, brief),
+        temperature: 0.0,
+        responseFormat: "json",
+      },
+      settings.routingTimeoutMs
+    );
 
     let rubric: JudgeRubric;
     try {
@@ -196,8 +231,9 @@ export async function runActorJudgeLoop(
         hasRequiredInputs: false,
         hasScopeBoundary: false,
         isUnambiguous: false,
-        missingRequirementQuestion:
-          "Could you restate what you want this skill to do, and on which files?",
+        missingRequirementQuestion: judgeRes.timedOut
+          ? "Routing model timed out. Could you restate the goal more specifically?"
+          : "Could you restate what you want this skill to do, and on which files?",
       };
     }
 

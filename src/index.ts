@@ -2,7 +2,12 @@ import { runActorJudgeLoop } from "./actorJudge.js";
 import { runAuggieStatus } from "./auggie.js";
 import { DEFAULT_SETTINGS, loadSettings } from "./config.js";
 import { mapModel } from "./modelMapper.js";
-import { loadSkill, matchSkillCommand, SkillNotFoundError } from "./parser.js";
+import {
+  InvalidSkillNameError,
+  loadSkill,
+  matchSkillCommand,
+  SkillNotFoundError,
+} from "./parser.js";
 import { RouterState } from "./state.js";
 import { executeSkill } from "./subAgent.js";
 import type {
@@ -50,7 +55,7 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
     try {
       skill = loadSkill(host, skillName);
     } catch (err) {
-      if (err instanceof SkillNotFoundError) {
+      if (err instanceof SkillNotFoundError || err instanceof InvalidSkillNameError) {
         host.postSystemMessage(`[System]: ${err.message}`);
       } else {
         host.postSystemMessage(
@@ -68,7 +73,18 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
       let rubric: JudgeRubric = outcome.rubric;
 
       if (!outcome.passed) {
-        const answer = await waitForUserClarification(skill, brief, rubric);
+        let answer: string;
+        try {
+          answer = await waitForUserClarification(skill, brief, rubric);
+        } catch (err) {
+          // Q&A timed out (or was rejected). Surface a system message and
+          // stop without trying to execute. State is already idle because
+          // `rejectPending` resets it.
+          host.postSystemMessage(
+            `[System]: ${(err as Error).message}. Skill /skill:${skill.name} cancelled.`
+          );
+          return;
+        }
         brief = {
           ...brief,
           userClarifications: [...brief.userClarifications, answer],
@@ -77,9 +93,10 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
 
       const pre = await preflight();
       if (!pre.ok) {
+        const detail = pre.detail.replace(/\s+/g, " ").trim().slice(0, 200);
         host.postSystemMessage(
           `[System Error]: Cannot execute skill. Augment daemon is offline or unauthenticated.${
-            pre.detail ? ` (${pre.detail})` : ""
+            detail ? ` (${detail})` : ""
           }`
         );
         state.reset();
@@ -132,7 +149,31 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
     host.postSystemMessage(`[System]: Missing context for skill. ${question}`);
 
     return new Promise<string>((resolve, reject) => {
-      state.beginWaitForUser({ skill, brief, rubric, resolve, reject });
+      let timer: NodeJS.Timeout | undefined;
+      const wrappedResolve = (a: string) => {
+        if (timer) clearTimeout(timer);
+        resolve(a);
+      };
+      const wrappedReject = (e: Error) => {
+        if (timer) clearTimeout(timer);
+        reject(e);
+      };
+      state.beginWaitForUser({
+        skill,
+        brief,
+        rubric,
+        resolve: wrappedResolve,
+        reject: wrappedReject,
+      });
+      if (settings.qaTimeoutMs > 0) {
+        timer = setTimeout(() => {
+          state.rejectPending(
+            new Error(
+              `Q&A timed out after ${Math.round(settings.qaTimeoutMs / 1000)}s waiting for user input`
+            )
+          );
+        }, settings.qaTimeoutMs);
+      }
     });
   }
 
@@ -148,6 +189,8 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
   });
 
   // While `waitingForUser`, capture the next typed message as the answer.
+  // After consumption the state machine flips to `resuming`, so any second
+  // message arriving in the same tick falls through as a no-op.
   const offBefore = host.onBeforeMessage((msg) => {
     if (state.phase !== "waitingForUser") return { cancel: false };
     state.consumeUserAnswer(msg);
@@ -171,7 +214,14 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
 
 export { DEFAULT_SETTINGS };
 export { mapModel } from "./modelMapper.js";
-export { matchSkillCommand, locateSkillFile, parseSkillFile, loadSkill, SkillNotFoundError } from "./parser.js";
+export {
+  matchSkillCommand,
+  locateSkillFile,
+  parseSkillFile,
+  loadSkill,
+  SkillNotFoundError,
+  InvalidSkillNameError,
+} from "./parser.js";
 export { makeOverflowMiddleware, runAuggieStatus, AUGGIE_DIRECTIVE, AUGGIE_MCP_NAME, AUGGIE_TOOL_NAME } from "./auggie.js";
 export { runActorJudgeLoop } from "./actorJudge.js";
 export { RouterState } from "./state.js";

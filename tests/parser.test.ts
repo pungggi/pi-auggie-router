@@ -8,6 +8,7 @@ import {
   parseSkillFile,
   locateSkillFile,
   SkillNotFoundError,
+  InvalidSkillNameError,
 } from "../src/parser.ts";
 import type { PiHost } from "../src/types.ts";
 
@@ -109,5 +110,27 @@ describe("locateSkillFile", () => {
 
   it("throws SkillNotFoundError when nothing exists", () => {
     assert.throws(() => locateSkillFile(makeHost(), "ghost"), SkillNotFoundError);
+  });
+
+  it("rejects skill names with path separators (M1 traversal guard)", () => {
+    // Plant a real file at the traversal target so a buggy implementation
+    // would happily read it.
+    mkdirSync(join(workspace, "leak"), { recursive: true });
+    writeFileSync(join(workspace, "leak", "SKILL.md"), "leaked");
+    const traversal = join("..", "..", "leak");
+    assert.throws(
+      () => locateSkillFile(makeHost(), traversal),
+      InvalidSkillNameError
+    );
+  });
+
+  it("rejects skill names containing dots, slashes, or backslashes", () => {
+    for (const bad of ["..", "a/b", "a\\b", "a.b", "a b", ""]) {
+      assert.throws(
+        () => locateSkillFile(makeHost(), bad),
+        InvalidSkillNameError,
+        `expected ${JSON.stringify(bad)} to be rejected`
+      );
+    }
   });
 });

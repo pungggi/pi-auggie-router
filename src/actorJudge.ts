@@ -133,9 +133,15 @@ function coerceRubric(raw: unknown): JudgeRubric {
 }
 
 /**
- * Race the routing-LLM call against `routingTimeoutMs`. On timeout we abort
- * the request (so the host can stop billing) and resolve with empty text,
- * which the caller's coerce* fallbacks turn into a "missing context" rubric.
+ * Race the routing-LLM call against `routingTimeoutMs`.
+ *
+ * The race is enforced by `Promise.race`, not by trusting the host to honour
+ * `AbortSignal`. If the host ignores the signal, its promise stays pending —
+ * but the timeout branch wins the race and `callWithTimeout` resolves with
+ * `{ text: "", timedOut: true }`, so the caller is never blocked beyond
+ * `timeoutMs`. The signal is still passed so well-behaved hosts can stop
+ * upstream billing; the still-pending request is left as host-managed
+ * detritus that the GC will reap once it finally settles.
  */
 async function callWithTimeout(
   host: PiHost,
@@ -147,15 +153,27 @@ async function callWithTimeout(
     return { text: r.text, timedOut: false };
   }
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  let timer: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<{ text: string; timedOut: true }>((resolve) => {
+    timer = setTimeout(() => {
+      ctrl.abort();
+      resolve({ text: "", timedOut: true });
+    }, timeoutMs);
+  });
+  const callPromise = host
+    .callLLM({ ...opts, signal: ctrl.signal })
+    .then((r) => ({ text: r.text, timedOut: false as const }))
+    .catch((err: unknown) => {
+      if (ctrl.signal.aborted) return { text: "", timedOut: true as const };
+      throw err;
+    });
   try {
-    const r = await host.callLLM({ ...opts, signal: ctrl.signal });
-    return { text: r.text, timedOut: false };
-  } catch (err) {
-    if (ctrl.signal.aborted) return { text: "", timedOut: true };
-    throw err;
+    return await Promise.race([callPromise, timeoutPromise]);
   } finally {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
+    // Swallow any later rejection from a still-running call so it doesn't
+    // surface as an unhandled promise rejection after the race resolved.
+    callPromise.catch(() => {});
   }
 }
 

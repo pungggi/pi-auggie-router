@@ -69,6 +69,8 @@ All knobs live under `auggieRouter` in `.pi/settings.json`:
     "routingModel": "anthropic/claude-3-5-haiku",
     "historyWindow": 20,
     "maxJudgeIterations": 2,
+    "routingTimeoutMs": 60000,
+    "qaTimeoutMs": 300000,
     "totalTimeoutMs": 300000,
     "inactivityTimeoutMs": 60000,
     "subAgentTemperature": 0.0,
@@ -76,6 +78,11 @@ All knobs live under `auggieRouter` in `.pi/settings.json`:
   }
 }
 ```
+
+> **Note on data exposure:** the routing-class model (default
+> `claude-3-5-haiku` via OpenRouter) sees the last `historyWindow` chat
+> messages. If your chat may contain secrets, point `routingModel` at a
+> self-hosted gateway or trim `historyWindow`.
 
 Defaults match the values shown above. Only `defaultProvider` is expected to
 change in normal use; everything else is opinionated for a reason.

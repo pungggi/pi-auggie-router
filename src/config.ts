@@ -6,6 +6,8 @@ export const DEFAULT_SETTINGS: RouterSettings = {
   routingModel: "anthropic/claude-3-5-haiku",
   historyWindow: 20,
   maxJudgeIterations: 2,
+  routingTimeoutMs: 60_000,
+  qaTimeoutMs: 300_000,
   totalTimeoutMs: 300_000,
   inactivityTimeoutMs: 60_000,
   subAgentTemperature: 0.0,

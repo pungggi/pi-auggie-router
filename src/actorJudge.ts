@@ -133,6 +133,51 @@ function coerceRubric(raw: unknown): JudgeRubric {
 }
 
 /**
+ * Race the routing-LLM call against `routingTimeoutMs`.
+ *
+ * The race is enforced by `Promise.race`, not by trusting the host to honour
+ * `AbortSignal`. If the host ignores the signal, its promise stays pending —
+ * but the timeout branch wins the race and `callWithTimeout` resolves with
+ * `{ text: "", timedOut: true }`, so the caller is never blocked beyond
+ * `timeoutMs`. The signal is still passed so well-behaved hosts can stop
+ * upstream billing; the still-pending request is left as host-managed
+ * detritus that the GC will reap once it finally settles.
+ */
+async function callWithTimeout(
+  host: PiHost,
+  opts: Parameters<PiHost["callLLM"]>[0],
+  timeoutMs: number
+): Promise<{ text: string; timedOut: boolean }> {
+  if (timeoutMs <= 0) {
+    const r = await host.callLLM(opts);
+    return { text: r.text, timedOut: false };
+  }
+  const ctrl = new AbortController();
+  let timer: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<{ text: string; timedOut: true }>((resolve) => {
+    timer = setTimeout(() => {
+      ctrl.abort();
+      resolve({ text: "", timedOut: true });
+    }, timeoutMs);
+  });
+  const callPromise = host
+    .callLLM({ ...opts, signal: ctrl.signal })
+    .then((r) => ({ text: r.text, timedOut: false as const }))
+    .catch((err: unknown) => {
+      if (ctrl.signal.aborted) return { text: "", timedOut: true as const };
+      throw err;
+    });
+  try {
+    return await Promise.race([callPromise, timeoutPromise]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    // Swallow any later rejection from a still-running call so it doesn't
+    // surface as an unhandled promise rejection after the race resolved.
+    callPromise.catch(() => {});
+  }
+}
+
+/**
  * Run the 2-pass Actor/Judge loop. Returns the final brief + judge verdict.
  * Caller decides what to do when `passed === false` (typically: trigger Q&A).
  */
@@ -159,12 +204,16 @@ export async function runActorJudgeLoop(
   };
 
   for (let i = 1; i <= settings.maxJudgeIterations; i++) {
-    const actorRes = await host.callLLM({
-      model: settings.routingModel,
-      messages: buildActorMessages(skill, history, priorBrief, priorRubric),
-      temperature: 0.0,
-      responseFormat: "json",
-    });
+    const actorRes = await callWithTimeout(
+      host,
+      {
+        model: settings.routingModel,
+        messages: buildActorMessages(skill, history, priorBrief, priorRubric),
+        temperature: 0.0,
+        responseFormat: "json",
+      },
+      settings.routingTimeoutMs
+    );
 
     let brief: SkillBrief;
     try {
@@ -180,12 +229,16 @@ export async function runActorJudgeLoop(
       };
     }
 
-    const judgeRes = await host.callLLM({
-      model: settings.routingModel,
-      messages: buildJudgeMessages(skill, history, brief),
-      temperature: 0.0,
-      responseFormat: "json",
-    });
+    const judgeRes = await callWithTimeout(
+      host,
+      {
+        model: settings.routingModel,
+        messages: buildJudgeMessages(skill, history, brief),
+        temperature: 0.0,
+        responseFormat: "json",
+      },
+      settings.routingTimeoutMs
+    );
 
     let rubric: JudgeRubric;
     try {
@@ -196,8 +249,9 @@ export async function runActorJudgeLoop(
         hasRequiredInputs: false,
         hasScopeBoundary: false,
         isUnambiguous: false,
-        missingRequirementQuestion:
-          "Could you restate what you want this skill to do, and on which files?",
+        missingRequirementQuestion: judgeRes.timedOut
+          ? "Routing model timed out. Could you restate the goal more specifically?"
+          : "Could you restate what you want this skill to do, and on which files?",
       };
     }
 

@@ -6,7 +6,12 @@ import type { JudgeRubric, ParsedSkill, SkillBrief } from "./types.js";
  * running the user's main editor input is locked.
  */
 
-export type RouterPhase = "idle" | "evaluating" | "waitingForUser" | "executing";
+export type RouterPhase =
+  | "idle"
+  | "evaluating"
+  | "waitingForUser"
+  | "resuming"
+  | "executing";
 
 interface PendingSkillContext {
   skill: ParsedSkill;
@@ -37,7 +42,11 @@ export class RouterState {
   }
 
   beginExecution(): void {
-    if (this._phase !== "evaluating" && this._phase !== "waitingForUser") {
+    if (
+      this._phase !== "evaluating" &&
+      this._phase !== "waitingForUser" &&
+      this._phase !== "resuming"
+    ) {
       throw new Error(`Cannot execute from phase=${this._phase}`);
     }
     this._phase = "executing";
@@ -53,16 +62,33 @@ export class RouterState {
   }
 
   /**
-   * Consume the user's clarification input. Returns the captured pending
-   * context so the caller can splice the answer into the brief.
+   * Consume the user's clarification input. Transitions to `resuming` and
+   * clears `_pending` synchronously so a fast second `onBeforeMessage` fire
+   * — which would otherwise see `phase === "waitingForUser"` and silently
+   * swallow the user's next message — falls through as a no-op.
    */
   consumeUserAnswer(answer: string): PendingSkillContext {
     if (this._phase !== "waitingForUser" || !this._pending) {
       throw new Error("No pending Q&A to consume");
     }
     const pending = this._pending;
+    this._pending = null;
+    this._phase = "resuming";
     pending.resolve(answer);
     return pending;
+  }
+
+  /** Reject the pending Q&A (timeout / user cancellation) and reset to idle. */
+  rejectPending(reason: Error): void {
+    if (!this._pending) return;
+    const pending = this._pending;
+    this._pending = null;
+    this._phase = "idle";
+    try {
+      pending.reject(reason);
+    } catch {
+      /* ignore */
+    }
   }
 
   /** Force-reset to idle (used in error paths and on completion). */

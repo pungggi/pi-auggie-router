@@ -36,6 +36,12 @@ Rules:
   short, user-facing question that would unblock execution.
 - If all booleans are true, "missingRequirementQuestion" must be null.`;
 
+/** SEC-05: maximum LLM response size before JSON.parse (256 KB). */
+const MAX_LLM_RESPONSE_BYTES = 256 * 1024;
+
+/** SEC-09: maximum length of a single chat message injected into prompts. */
+const MAX_MESSAGE_CHARS = 10_000;
+
 export interface JudgeOutcome {
   brief: SkillBrief;
   rubric: JudgeRubric;
@@ -52,13 +58,32 @@ function rubricPassed(r: JudgeRubric): boolean {
 /**
  * Best-effort JSON extraction. Models occasionally wrap output in code fences
  * even when told not to; we strip those before parsing.
+ *
+ * SEC-05: rejects inputs exceeding MAX_LLM_RESPONSE_BYTES to prevent
+ * memory exhaustion from a compromised or misbehaving routing model.
  */
 function extractJson(text: string): unknown {
+  const byteLen = Buffer.byteLength(text, "utf8");
+  if (byteLen > MAX_LLM_RESPONSE_BYTES) {
+    throw new Error(
+      `LLM response too large to parse (${byteLen} bytes > ${MAX_LLM_RESPONSE_BYTES})`
+    );
+  }
   let trimmed = text.trim();
   if (trimmed.startsWith("```")) {
     trimmed = trimmed.replace(/^```(?:json)?\s*/i, "").replace(/```$/, "").trim();
   }
   return JSON.parse(trimmed);
+}
+
+/**
+ * SEC-09: truncate individual messages to MAX_MESSAGE_CHARS before
+ * including them in routing prompts, limiting exposure of large
+ * pasted content (logs, secrets, file dumps) to the routing model.
+ */
+function truncateMessage(content: string): string {
+  if (content.length <= MAX_MESSAGE_CHARS) return content;
+  return content.slice(0, MAX_MESSAGE_CHARS) + "\n[...truncated]";
 }
 
 function buildActorMessages(
@@ -68,7 +93,7 @@ function buildActorMessages(
   judgeFeedback: JudgeRubric | null
 ): ChatMessage[] {
   const historyBlock = history
-    .map((m) => `[${m.role}] ${m.content}`)
+    .map((m) => `[${m.role}] ${truncateMessage(m.content)}`)
     .join("\n");
 
   const revisionBlock =
@@ -95,7 +120,9 @@ function buildJudgeMessages(
   history: ChatMessage[],
   brief: SkillBrief
 ): ChatMessage[] {
-  const historyBlock = history.map((m) => `[${m.role}] ${m.content}`).join("\n");
+  const historyBlock = history
+    .map((m) => `[${m.role}] ${truncateMessage(m.content)}`)
+    .join("\n");
   return [
     { role: "system", content: JUDGE_SYSTEM_PROMPT },
     {

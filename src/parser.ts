@@ -22,7 +22,7 @@ export function matchSkillCommand(input: string): SkillCommandMatch | null {
 
 export class SkillNotFoundError extends Error {
   constructor(public readonly skillName: string, public readonly searched: string[]) {
-    super(`Skill "${skillName}" not found. Searched: ${searched.join(", ")}`);
+    super(`Skill "${skillName}" not found.`);
     this.name = "SkillNotFoundError";
   }
 }

@@ -1,5 +1,5 @@
 import { runActorJudgeLoop } from "./actorJudge.js";
-import { runAuggieStatus } from "./auggie.js";
+import { redactSecrets, runAuggieStatus } from "./auggie.js";
 import { DEFAULT_SETTINGS, loadSettings } from "./config.js";
 import { mapModel } from "./modelMapper.js";
 import {
@@ -37,7 +37,7 @@ const LOCK_REASON = "pi-auggie-router: skill execution in progress";
 export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): RouterHandle {
   const settings = loadSettings(host);
   const state = new RouterState();
-  const preflight = opts.preflight ?? (() => runAuggieStatus());
+  const preflight = opts.preflight ?? (() => runAuggieStatus(settings));
 
   const log = (level: "debug" | "info" | "warn" | "error", msg: string) => {
     host.log?.(level, msg);
@@ -93,7 +93,7 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
 
       const pre = await preflight();
       if (!pre.ok) {
-        const detail = pre.detail.replace(/\s+/g, " ").trim().slice(0, 200);
+        const detail = redactSecrets(pre.detail.replace(/\s+/g, " ").trim()).slice(0, 200);
         host.postSystemMessage(
           `[System Error]: Cannot execute skill. Augment daemon is offline or unauthenticated.${
             detail ? ` (${detail})` : ""
@@ -109,7 +109,7 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
         `[System]: ⚙️ Executing /skill:${skill.name} (Auggie semantic retrieval running...)`
       );
 
-      const resolvedModel = mapModel(skill.rawModel, settings.defaultProvider);
+      const resolvedModel = mapModel(skill.rawModel, settings.defaultProvider, settings.allowedProviderPrefixes);
       try {
         const result = await executeSkill(host, settings, {
           skill,
@@ -213,7 +213,7 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
 }
 
 export { DEFAULT_SETTINGS };
-export { mapModel } from "./modelMapper.js";
+export { mapModel, DisallowedProviderError } from "./modelMapper.js";
 export {
   matchSkillCommand,
   locateSkillFile,
@@ -222,7 +222,7 @@ export {
   SkillNotFoundError,
   InvalidSkillNameError,
 } from "./parser.js";
-export { makeOverflowMiddleware, runAuggieStatus, AUGGIE_DIRECTIVE, AUGGIE_MCP_NAME, AUGGIE_TOOL_NAME } from "./auggie.js";
+export { makeOverflowMiddleware, redactSecrets, runAuggieStatus, AUGGIE_DIRECTIVE, AUGGIE_MCP_NAME, AUGGIE_TOOL_NAME } from "./auggie.js";
 export { runActorJudgeLoop } from "./actorJudge.js";
 export { RouterState } from "./state.js";
 export type {

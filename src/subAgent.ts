@@ -47,7 +47,7 @@ export async function executeSkill(
     systemPrompt,
     userPrompt: renderBrief(input.brief),
     temperature: settings.subAgentTemperature,
-    mcpServers: [buildAuggieMcpSpec()],
+    mcpServers: [buildAuggieMcpSpec(settings)],
     toolResultMiddleware: makeOverflowMiddleware(settings.overflowCeilingBytes),
     totalTimeoutMs: settings.totalTimeoutMs,
     inactivityTimeoutMs: settings.inactivityTimeoutMs,

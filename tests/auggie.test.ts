@@ -6,6 +6,7 @@ import {
   AUGGIE_TOOL_NAME,
   buildAuggieMcpSpec,
   makeOverflowMiddleware,
+  redactSecrets,
 } from "../src/auggie.ts";
 
 describe("makeOverflowMiddleware", () => {
@@ -71,10 +72,15 @@ describe("makeOverflowMiddleware", () => {
 
 describe("buildAuggieMcpSpec", () => {
   it("attaches the auggie MCP via stdio", () => {
-    const spec = buildAuggieMcpSpec();
+    const spec = buildAuggieMcpSpec({ auggieBinPath: "auggie" });
     assert.equal(spec.name, AUGGIE_MCP_NAME);
     assert.equal(spec.command, "auggie");
     assert.deepEqual(spec.args, ["mcp"]);
+  });
+
+  it("uses the configured auggieBinPath", () => {
+    const spec = buildAuggieMcpSpec({ auggieBinPath: "/usr/local/bin/auggie" });
+    assert.equal(spec.command, "/usr/local/bin/auggie");
   });
 });
 
@@ -82,5 +88,37 @@ describe("AUGGIE_DIRECTIVE", () => {
   it("instructs the sub-agent to use codebase-retrieval", () => {
     assert.match(AUGGIE_DIRECTIVE, /codebase-retrieval/);
     assert.match(AUGGIE_DIRECTIVE, /Do not attempt to run auggie in the terminal/);
+  });
+});
+
+describe("redactSecrets", () => {
+  it("redacts Bearer tokens", () => {
+    const input = "Error: Bearer eyJhbGciOiJIUzI1NiJ9.abc123";
+    const result = redactSecrets(input);
+    assert.ok(!result.includes("eyJhbGciOiJIUzI1NiJ9"));
+    assert.ok(result.includes("[REDACTED]"));
+  });
+
+  it("redacts api-key assignments", () => {
+    const result = redactSecrets('api-key=sk-abc1234567890123456789');
+    assert.ok(!result.includes("sk-abc1234567890123456789"));
+    assert.ok(result.includes("[REDACTED]"));
+  });
+
+  it("redacts OpenAI-style keys", () => {
+    const result = redactSecrets("key: sk-proj-abc123def456ghi789jkl012mno345");
+    assert.ok(!result.includes("sk-proj-"));
+    assert.ok(result.includes("[REDACTED]"));
+  });
+
+  it("redacts long hex strings", () => {
+    const hex = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
+    const result = redactSecrets(`token=${hex}`);
+    assert.ok(!result.includes(hex));
+  });
+
+  it("leaves safe strings untouched", () => {
+    const safe = "daemon not running, exit code 1";
+    assert.equal(redactSecrets(safe), safe);
   });
 });

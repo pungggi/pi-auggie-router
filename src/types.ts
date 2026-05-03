@@ -116,6 +116,18 @@ export interface RouterSettings {
   subAgentTemperature: number;
   /** Single-payload Auggie ceiling, bytes. */
   overflowCeilingBytes: number;
+  /**
+   * Absolute or relative path to the `auggie` binary.
+   * Defaults to `"auggie"` (relies on $PATH resolution).
+   * Setting this explicitly avoids PATH-based attacks in shared environments.
+   */
+  auggieBinPath: string;
+  /**
+   * Allowed model provider prefixes for SKILL frontmatter `model:` values.
+   * If set, fully-qualified models not matching a prefix in this list are
+   * rejected at mapping time. Empty array = allow all (legacy behaviour).
+   */
+  allowedProviderPrefixes: string[];
 }
 
 export interface ParsedSkill {

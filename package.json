@@ -38,13 +38,13 @@
     "node": ">=20.6.0"
   },
   "dependencies": {
-    "gray-matter": "^4.0.3"
+    "gray-matter": "4.0.3"
   },
   "devDependencies": {
-    "@types/node": "^20.11.0",
-    "rimraf": "^5.0.5",
-    "tsx": "^4.21.0",
-    "typescript": "^5.4.0"
+    "@types/node": "20.11.0",
+    "rimraf": "5.0.5",
+    "tsx": "4.21.0",
+        "typescript": "5.8.3"
   },
   "license": "MIT"
 }

@@ -36,6 +36,12 @@ Rules:
   short, user-facing question that would unblock execution.
 - If all booleans are true, "missingRequirementQuestion" must be null.`;
 
+/** SEC-05: maximum LLM response size before JSON.parse (256 KB). */
+const MAX_LLM_RESPONSE_BYTES = 256 * 1024;
+
+/** SEC-09: maximum length of a single chat message injected into prompts. */
+const MAX_MESSAGE_CHARS = 10_000;
+
 export interface JudgeOutcome {
   brief: SkillBrief;
   rubric: JudgeRubric;
@@ -52,13 +58,32 @@ function rubricPassed(r: JudgeRubric): boolean {
 /**
  * Best-effort JSON extraction. Models occasionally wrap output in code fences
  * even when told not to; we strip those before parsing.
+ *
+ * SEC-05: rejects inputs exceeding MAX_LLM_RESPONSE_BYTES to prevent
+ * memory exhaustion from a compromised or misbehaving routing model.
  */
 function extractJson(text: string): unknown {
+  const byteLen = Buffer.byteLength(text, "utf8");
+  if (byteLen > MAX_LLM_RESPONSE_BYTES) {
+    throw new Error(
+      `LLM response too large to parse (${byteLen} bytes > ${MAX_LLM_RESPONSE_BYTES})`
+    );
+  }
   let trimmed = text.trim();
   if (trimmed.startsWith("```")) {
     trimmed = trimmed.replace(/^```(?:json)?\s*/i, "").replace(/```$/, "").trim();
   }
   return JSON.parse(trimmed);
+}
+
+/**
+ * SEC-09: truncate individual messages to MAX_MESSAGE_CHARS before
+ * including them in routing prompts, limiting exposure of large
+ * pasted content (logs, secrets, file dumps) to the routing model.
+ */
+function truncateMessage(content: string): string {
+  if (content.length <= MAX_MESSAGE_CHARS) return content;
+  return content.slice(0, MAX_MESSAGE_CHARS) + "\n[...truncated]";
 }
 
 function buildActorMessages(
@@ -68,7 +93,7 @@ function buildActorMessages(
   judgeFeedback: JudgeRubric | null
 ): ChatMessage[] {
   const historyBlock = history
-    .map((m) => `[${m.role}] ${m.content}`)
+    .map((m) => `[${m.role}] ${truncateMessage(m.content)}`)
     .join("\n");
 
   const revisionBlock =
@@ -95,7 +120,9 @@ function buildJudgeMessages(
   history: ChatMessage[],
   brief: SkillBrief
 ): ChatMessage[] {
-  const historyBlock = history.map((m) => `[${m.role}] ${m.content}`).join("\n");
+  const historyBlock = history
+    .map((m) => `[${m.role}] ${truncateMessage(m.content)}`)
+    .join("\n");
   return [
     { role: "system", content: JUDGE_SYSTEM_PROMPT },
     {
@@ -133,9 +160,15 @@ function coerceRubric(raw: unknown): JudgeRubric {
 }
 
 /**
- * Race the routing-LLM call against `routingTimeoutMs`. On timeout we abort
- * the request (so the host can stop billing) and resolve with empty text,
- * which the caller's coerce* fallbacks turn into a "missing context" rubric.
+ * Race the routing-LLM call against `routingTimeoutMs`.
+ *
+ * The race is enforced by `Promise.race`, not by trusting the host to honour
+ * `AbortSignal`. If the host ignores the signal, its promise stays pending —
+ * but the timeout branch wins the race and `callWithTimeout` resolves with
+ * `{ text: "", timedOut: true }`, so the caller is never blocked beyond
+ * `timeoutMs`. The signal is still passed so well-behaved hosts can stop
+ * upstream billing; the still-pending request is left as host-managed
+ * detritus that the GC will reap once it finally settles.
  */
 async function callWithTimeout(
   host: PiHost,
@@ -147,15 +180,29 @@ async function callWithTimeout(
     return { text: r.text, timedOut: false };
   }
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  let timer: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<{ text: string; timedOut: true }>((resolve) => {
+    timer = setTimeout(() => {
+      ctrl.abort();
+      resolve({ text: "", timedOut: true });
+    }, timeoutMs);
+  });
+  let callPromise: Promise<{ text: string; timedOut: boolean }> =
+    Promise.resolve({ text: "", timedOut: false });
   try {
-    const r = await host.callLLM({ ...opts, signal: ctrl.signal });
-    return { text: r.text, timedOut: false };
-  } catch (err) {
-    if (ctrl.signal.aborted) return { text: "", timedOut: true };
-    throw err;
+    callPromise = host
+      .callLLM({ ...opts, signal: ctrl.signal })
+      .then((r) => ({ text: r.text, timedOut: false as const }))
+      .catch((err: unknown) => {
+        if (ctrl.signal.aborted) return { text: "", timedOut: true as const };
+        throw err;
+      });
+    return await Promise.race([callPromise, timeoutPromise]);
   } finally {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
+    // Swallow any later rejection from a still-running call so it doesn't
+    // surface as an unhandled promise rejection after the race resolved.
+    callPromise.catch(() => {});
   }
 }
 

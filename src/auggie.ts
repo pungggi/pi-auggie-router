@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import type { MCPServerSpec, ToolResultMiddleware } from "./types.js";
+import type { MCPServerSpec, RouterSettings, ToolResultMiddleware } from "./types.js";
 
 export const AUGGIE_MCP_NAME = "auggie";
 export const AUGGIE_TOOL_NAME = "codebase-retrieval";
@@ -18,7 +18,36 @@ export interface PreflightResult {
  * Per PRD §2.5: silent `auggie status` pre-flight. Resolves with `ok=false`
  * if the binary is missing, exits non-zero, or hangs > 5s.
  */
-export function runAuggieStatus(timeoutMs = 5_000): Promise<PreflightResult> {
+/**
+ * Patterns that may indicate secrets/tokens in stderr output.
+ * Matches common API key formats, Bearer tokens, and long hex strings.
+ */
+const SECRET_PATTERNS = [
+  /Bearer\s+[A-Za-z0-9\-._~+/]+=*/g,
+  /[Aa][Pp][Ii][-_]?[Kk][Ee][Yy]\s*[:=]\s*\S+/g,
+  /[Ss][Ee][Cc][Rr][Ee][Tt]\s*[:=]\s*\S+/g,
+  /[Tt][Oo][Kk][Ee][Nn]\s*[:=]\s*\S+/g,
+  /sk-[A-Za-z0-9\-._]{20,}/g,
+  /[0-9a-f]{40,}/gi,
+];
+
+/**
+ * Redact potential secrets from a string. Replaces matched regions
+ * with `[REDACTED]`.
+ */
+export function redactSecrets(text: string): string {
+  let result = text;
+  for (const pattern of SECRET_PATTERNS) {
+    result = result.replace(pattern, "[REDACTED]");
+  }
+  return result;
+}
+
+export function runAuggieStatus(
+  settings?: Pick<RouterSettings, "auggieBinPath">,
+  timeoutMs = 5_000
+): Promise<PreflightResult> {
+  const binPath = settings?.auggieBinPath ?? "auggie";
   return new Promise((resolve) => {
     let resolved = false;
     const finish = (res: PreflightResult) => {
@@ -29,7 +58,9 @@ export function runAuggieStatus(timeoutMs = 5_000): Promise<PreflightResult> {
 
     let child;
     try {
-      child = spawn("auggie", ["status"], { stdio: ["ignore", "pipe", "pipe"] });
+      child = spawn(binPath, ["status"], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
     } catch (err) {
       finish({ ok: false, detail: (err as Error).message });
       return;
@@ -71,10 +102,12 @@ export function runAuggieStatus(timeoutMs = 5_000): Promise<PreflightResult> {
   });
 }
 
-export function buildAuggieMcpSpec(): MCPServerSpec {
+export function buildAuggieMcpSpec(
+  settings: Pick<RouterSettings, "auggieBinPath">
+): MCPServerSpec {
   return {
     name: AUGGIE_MCP_NAME,
-    command: "auggie",
+    command: settings.auggieBinPath,
     args: ["mcp"],
   };
 }

@@ -74,7 +74,9 @@ All knobs live under `auggieRouter` in `.pi/settings.json`:
     "totalTimeoutMs": 300000,
     "inactivityTimeoutMs": 60000,
     "subAgentTemperature": 0.0,
-    "overflowCeilingBytes": 25000
+    "overflowCeilingBytes": 25000,
+    "auggieBinPath": "auggie",
+    "allowedProviderPrefixes": []
   }
 }
 ```
@@ -87,10 +89,20 @@ All knobs live under `auggieRouter` in `.pi/settings.json`:
 Defaults match the values shown above. Only `defaultProvider` is expected to
 change in normal use; everything else is opinionated for a reason.
 
+### Security-relevant settings
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `auggieBinPath` | `"auggie"` | Absolute path to the `auggie` binary. Override to avoid `$PATH` lookup attacks in shared environments. |
+| `allowedProviderPrefixes` | `[]` (allow all) | Non-empty array restricts which provider prefixes a SKILL `model:` field may resolve to. E.g. `["openrouter"]` blocks `evil-provider/vendor/model`. |
+
+All numeric settings are validated within safe ranges; invalid values are silently
+dropped and a warning is logged. See source (`config.ts`) for exact bounds.
+
 ### Skill `model:` translation
 
 The `model:` field in a skill's frontmatter is translated through
-`mapModel(rawModel, defaultProvider)`:
+`mapModel(rawModel, defaultProvider, allowedProviderPrefixes)`:
 
 | Frontmatter `model`                       | Resolved gateway ID                                |
 | ----------------------------------------- | -------------------------------------------------- |
@@ -98,6 +110,11 @@ The `model:` field in a skill's frontmatter is translated through
 | `anthropic/claude-3-5-haiku`              | `openrouter/anthropic/claude-3-5-haiku`            |
 | `openrouter/anthropic/claude-3-5-sonnet`  | _(unchanged — already fully qualified)_            |
 | _(missing)_                               | `openrouter/anthropic/claude-3-5-sonnet` (fallback)|
+
+When `allowedProviderPrefixes` is set (e.g. `["openrouter"]`), a fully-qualified
+model whose provider prefix isn't in the list throws `DisallowedProviderError` and
+execution is aborted. This prevents a malicious SKILL.md from routing requests
+to an untrusted provider.
 
 ## Execution flow
 
@@ -140,14 +157,56 @@ get a `[System]: Router busy` warning.
 
 ## Hardcoded defaults (PRD §4)
 
-| Knob                    | Default                          | Why                                                |
-| ----------------------- | -------------------------------- | -------------------------------------------------- |
-| Routing engine          | `anthropic/claude-3-5-haiku`     | Cheap and Anthropic-aligned for routing.           |
-| History window          | 20 messages                      | Enough for context, not enough to drown the brief. |
-| Total timeout           | 300 s                            | Hard kill prevents runaway billing.                |
-| MCP inactivity timeout  | 60 s                             | Stops OpenRouter loops when a model hangs.         |
-| Sub-agent temperature   | 0.0                              | Mandatory for rigid tool usage.                    |
-| Overflow ceiling        | 25 000 B                         | Forces query refinement, not context dumping.      |
+| Knob                      | Default                          | Why                                                |
+| ------------------------- | -------------------------------- | -------------------------------------------------- |
+| Routing engine            | `anthropic/claude-3-5-haiku`     | Cheap and Anthropic-aligned for routing.           |
+| History window            | 20 messages                      | Enough for context, not enough to drown the brief. |
+| Total timeout             | 300 s                            | Hard kill prevents runaway billing.                |
+| MCP inactivity timeout    | 60 s                             | Stops OpenRouter loops when a model hangs.         |
+| Sub-agent temperature     | 0.0                              | Mandatory for rigid tool usage.                    |
+| Overflow ceiling          | 25 000 B                         | Forces query refinement, not context dumping.      |
+| Auggie binary path        | `"auggie"`                       | Relies on `$PATH` by default; override for security.|
+| Allowed provider prefixes | `[]` (allow all)                 | Restrict to known providers to prevent model redirection. |
+
+## Security model
+
+### Trust boundary: workspace filesystem
+
+`pi-auggie-router` loads SKILL.md files from the workspace (`.pi/skills/`)
+and the user's home directory (`~/.pi/agent/skills/`). The **markdown body** of
+a skill file is injected verbatim into LLM prompts (routing model and
+sub-agent). This means:
+
+- Any process that can write to `.pi/skills/*/SKILL.md` effectively controls
+  the sub-agent's system prompt (prompt injection via filesystem).
+- A malicious `model:` value in SKILL.md frontmatter can redirect execution to
+  a different provider. Use `allowedProviderPrefixes` to restrict this.
+- Do **not** commit SKILL.md files from untrusted sources without review.
+
+### Data sent to LLM providers
+
+The routing model (`claude-3-5-haiku` by default) sees:
+
+- The skill's markdown instructions.
+- The last `historyWindow` chat messages (truncated to 10 000 chars each).
+- Actor/Judge JSON payloads.
+
+If your chat may contain secrets, point `routingModel` at a self-hosted gateway
+or reduce `historyWindow`.
+
+### Path resolution
+
+Skill names are validated against `[a-zA-Z0-9_-]+` — no dots, slashes, or
+path traversal sequences. Error messages omit filesystem paths to prevent
+information leakage.
+
+### Sub-process spawning
+
+The router spawns the `auggie` binary for pre-flight checks and as an MCP
+server. By default it relies on `$PATH` lookup; set `auggieBinPath` to an
+absolute path to eliminate this attack surface. stderr from `auggie status`
+is redacted for common secret patterns (API keys, Bearer tokens, hex strings)
+before being surfaced in the UI.
 
 ## Development
 

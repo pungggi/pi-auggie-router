@@ -22,6 +22,11 @@ interface HarnessOpts {
   settingsOverride?: Record<string, unknown>;
   /** When set, callLLM resolves after this many ms — and respects abort. */
   llmDelayMs?: number;
+  /**
+   * Misbehaving host: callLLM ignores the AbortSignal entirely. Used to
+   * verify that callWithTimeout's Promise.race short-circuits regardless.
+   */
+  ignoreSignal?: boolean;
 }
 
 function harness(opts: HarnessOpts) {
@@ -57,10 +62,12 @@ function harness(opts: HarnessOpts) {
       if (opts.llmDelayMs && opts.llmDelayMs > 0) {
         await new Promise<void>((resolve, reject) => {
           const timer = setTimeout(resolve, opts.llmDelayMs);
-          o.signal?.addEventListener("abort", () => {
-            clearTimeout(timer);
-            reject(new Error("aborted"));
-          });
+          if (!opts.ignoreSignal) {
+            o.signal?.addEventListener("abort", () => {
+              clearTimeout(timer);
+              reject(new Error("aborted"));
+            });
+          }
         });
       }
       return { text: t };
@@ -356,6 +363,37 @@ describe("createRouter end-to-end", () => {
 
       await triggered;
       assert.equal(h.subAgentCalls.length, 1);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("does not hang when the host ignores AbortSignal — Promise.race wins", async () => {
+    // 5s of slow work but a 25ms routing timeout AND an ignore-signal host:
+    // a non-racing implementation would await the full 5s and fail the test
+    // (the test runner's per-test timeout would actually fire first). With
+    // Promise.race the timeout branch resolves at 25ms and the test wraps
+    // in well under a second.
+    const h = harness({
+      llmResponses: [...PASSING_LLM_PAIR, ...PASSING_LLM_PAIR],
+      settingsOverride: { routingTimeoutMs: 25, qaTimeoutMs: 25 },
+      llmDelayMs: 5_000,
+      ignoreSignal: true,
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      const start = Date.now();
+      await router.trigger("/skill:demo");
+      const elapsed = Date.now() - start;
+      assert.ok(
+        elapsed < 1000,
+        `expected timeout to short-circuit, took ${elapsed}ms`
+      );
+      // Q&A is also capped, so the loop ends in cancellation.
+      const cancelled = h.messages.find((m) => m.text.includes("Q&A timed out"));
+      assert.ok(cancelled, "expected Q&A timeout cancel message");
+      assert.equal(h.subAgentCalls.length, 0);
     } finally {
       h.cleanup();
     }

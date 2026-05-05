@@ -117,23 +117,20 @@ opt in.
 
 ### Enabling adaptive routing
 
+The smallest opt-in is:
+
 ```json
 {
   "auggieRouter": {
     "executionRouting": {
       "enabled": true,
-      "preference": "balanced",
-      "surfaceDecision": true,
-      "skillModelPolicy": "pin",
-      "models": {
-        "cheap": "anthropic/claude-3-5-haiku",
-        "balanced": "anthropic/claude-3-5-sonnet",
-        "frontier": "anthropic/claude-3-7-sonnet"
-      }
+      "surfaceDecision": true
     }
   }
 }
 ```
+
+Omitted fields use the defaults shown in the main configuration block above.
 
 ### How it works
 
@@ -153,7 +150,7 @@ opt in.
 | --- | --- | --- | --- |
 | `enabled` | `true` / `false` | `false` | Turn adaptive routing on. |
 | `preference` | `preferCheap` / `balanced` / `preferBest` | `balanced` | Cost-vs-quality bias. |
-| `surfaceDecision` | `true` / `false` | `false` | Show the selected tier/model in the `[System]` execution message. |
+| `surfaceDecision` | `true` / `false` | `false` | Show the selected model in the `[System]` execution message. Routed decisions include tier; pinned/fallback decisions name their source. |
 | `skillModelPolicy` | `pin` / `ignore` | `pin` | How `SKILL.md` `model:` interacts with routing. |
 | `models.cheap` | model ID | `anthropic/claude-3-5-haiku` | Model for read-only / low-complexity tasks. |
 | `models.balanced` | model ID | `anthropic/claude-3-5-sonnet` | Model for scoped edits and medium-complexity tasks. |
@@ -194,16 +191,22 @@ If the selected tier has no model configured, the router walks a fallback chain:
 - Missing `balanced` → `frontier` → `cheap`
 - Missing `frontier` → `balanced` → `cheap`
 
-If nothing in the pool resolves, the router falls back to the legacy
-`mapModel(skill.rawModel, ...)` behavior so the skill still runs.
+If nothing in the pool resolves, the router falls back to legacy model
+resolution so the skill still runs. When no minimum tier is active, this may
+use `SKILL.md model:` through `mapModel(skill.rawModel, ...)`. When the Judge
+did not pass and the minimum tier is `balanced`, fallback uses the default
+balanced model instead of a potentially cheaper pinned model.
 
 ### Observability
 
-When `surfaceDecision=true`, the execution message includes the selected tier
-and resolved model:
+When `surfaceDecision=true`, the execution message includes the selected model.
+For routed decisions it includes the tier; for pinned or fallback decisions it
+names the source instead of showing the neutral `balanced` sentinel:
 
 ```
 [System]: ⚙️ Executing /skill:refactor using balanced model openrouter/anthropic/claude-3-5-sonnet. Reason: route balanced (complexity=medium, risk=small_edit, confidence=0.82)
+[System]: ⚙️ Executing /skill:refactor using SKILL.md model openrouter/anthropic/claude-3-7-sonnet. Reason: skillModelPolicy=pin; SKILL.md model honoured.
+[System]: ⚙️ Executing /skill:refactor using fallback model openrouter/anthropic/claude-3-5-sonnet. Reason: Execution-routing pool unavailable; used legacy default model resolution.
 ```
 
 When `surfaceDecision=false` (default), the existing minimal message is shown:
@@ -304,7 +307,7 @@ to an untrusted provider.
 Only one skill can be in flight at a time. New `/skill:` commands while busy
 get a `[System]: Router busy` warning.
 
-## Hardcoded defaults (PRD §4)
+## Operational defaults
 
 | Knob                      | Default                          | Why                                                |
 | ------------------------- | -------------------------------- | -------------------------------------------------- |
@@ -316,6 +319,10 @@ get a `[System]: Router busy` warning.
 | Overflow ceiling          | 25 000 B                         | Forces query refinement, not context dumping.      |
 | Auggie binary path        | `"auggie"`                       | Relies on `$PATH` by default; override for security.|
 | Allowed provider prefixes | `[]` (allow all)                 | Restrict to known providers to prevent model redirection. |
+| Adaptive routing          | disabled                         | Backwards-compatible opt-in.                       |
+| Adaptive preference       | `balanced`                       | Neutral cost-quality bias.                         |
+| Skill model policy        | `pin`                            | Preserve existing `SKILL.md model:` behavior.      |
+| Surface routing decision  | `false`                          | Keep default UI minimal.                           |
 
 ## Security model
 
@@ -339,9 +346,13 @@ The routing model (`claude-3-5-haiku` by default) sees:
 - The skill's markdown instructions.
 - The last `historyWindow` chat messages (truncated to 10 000 chars each).
 - Actor/Judge JSON payloads.
+- Judge routing metadata requests/outputs, including `executionRoute`
+  (`tier`, `complexity`, `risk`, `confidence`, `reason`).
 
-If your chat may contain secrets, point `routingModel` at a self-hosted gateway
-or reduce `historyWindow`.
+The sub-agent does **not** receive route metadata in its system or user prompt;
+route decisions are surfaced only through host system messages and structured
+logs. If your chat may contain secrets, point `routingModel` at a self-hosted
+gateway or reduce `historyWindow`.
 
 ### Path resolution
 

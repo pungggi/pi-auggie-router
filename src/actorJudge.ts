@@ -13,13 +13,13 @@ import type {
  * Phase-2 fallback route used when Judge output omits or malforms
  * `executionRoute`. Matches PRD §9.
  */
-export const DEFAULT_EXECUTION_ROUTE: ExecutionRoute = {
+export const DEFAULT_EXECUTION_ROUTE: Readonly<ExecutionRoute> = Object.freeze({
   tier: "balanced",
   complexity: "medium",
   risk: "unknown",
   confidence: 0,
   reason: "Routing metadata unavailable; using balanced default.",
-};
+});
 
 const TIER_SET: ReadonlySet<ExecutionRoutingTier> = new Set([
   "cheap",

@@ -257,6 +257,8 @@ export {
   runActorJudgeLoop,
 } from "./actorJudge.js";
 export type { JudgeOutcome } from "./actorJudge.js";
+export { chooseExecutionModel } from "./executionRouter.js";
+export type { ExecutionRouteSelection } from "./executionRouter.js";
 export { RouterState } from "./state.js";
 export type {
   ChatMessage,

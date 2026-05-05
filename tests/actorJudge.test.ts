@@ -198,11 +198,50 @@ describe("runActorJudgeLoop", () => {
     assert.deepEqual(out.route, DEFAULT_EXECUTION_ROUTE);
   });
 
+  it("coerces partially malformed executionRoute fields during Judge parsing", async () => {
+    const { host } = makeHost([
+      JSON.stringify({ userGoal: "g", constraints: [], knownContext: "" }),
+      JSON.stringify({
+        hasUserGoal: true,
+        hasRequiredInputs: true,
+        hasScopeBoundary: true,
+        isUnambiguous: true,
+        executionRoute: {
+          tier: "frontier",
+          complexity: "spicy",
+          risk: "architecture_change",
+          confidence: 2,
+          reason: "  Hard architecture task.  ",
+        },
+      }),
+    ]);
+    const out = await runActorJudgeLoop(host, DEFAULT_SETTINGS, SKILL);
+    assert.equal(out.passed, true);
+    assert.deepEqual(out.route, {
+      tier: "frontier",
+      complexity: "medium",
+      risk: "architecture_change",
+      confidence: 1,
+      reason: "Hard architecture task.",
+    });
+  });
+
   it("coerceExecutionRoute returns full default for non-object input", () => {
     assert.deepEqual(coerceExecutionRoute(undefined), DEFAULT_EXECUTION_ROUTE);
     assert.deepEqual(coerceExecutionRoute(null), DEFAULT_EXECUTION_ROUTE);
     assert.deepEqual(coerceExecutionRoute("balanced"), DEFAULT_EXECUTION_ROUTE);
     assert.deepEqual(coerceExecutionRoute([1, 2, 3]), DEFAULT_EXECUTION_ROUTE);
+  });
+
+  it("exports an immutable default execution route", () => {
+    assert.equal(Object.isFrozen(DEFAULT_EXECUTION_ROUTE), true);
+    assert.throws(
+      () => {
+        Object.defineProperty(DEFAULT_EXECUTION_ROUTE, "tier", { value: "cheap" });
+      },
+      /Cannot redefine property|not configurable/
+    );
+    assert.equal(DEFAULT_EXECUTION_ROUTE.tier, "balanced");
   });
 
   it("coerceExecutionRoute defaults invalid enum fields", () => {

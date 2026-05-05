@@ -4,7 +4,7 @@
 **Package:** `pi-auggie-router`  
 **Status owner:** TBD  
 **Last updated:** 2026-05-05  
-**Overall status:** Phases 1–2 complete — Judge emits and parses `ExecutionRoute`; Phase 3 next
+**Overall status:** Phases 1–3 complete — `chooseExecutionModel` ready; Phase 4 (router wiring) next
 
 ## 1. Status legend
 
@@ -23,7 +23,7 @@
 | 0 | PRD and tracking docs | `[x]` | PRD and this status tracker created. |
 | 1 | Types and config | `[x]` | Types in `src/types.ts`; defaults + validation in `src/config.ts`; tests in `tests/config.test.ts`. |
 | 2 | Judge route output | `[x]` | Judge prompt extended; `coerceExecutionRoute` parses with safe defaults; `JudgeOutcome.route` always populated; tests in `tests/actorJudge.test.ts`. |
-| 3 | Model selection helper | `[ ]` | Add pure `chooseExecutionModel(...)`. |
+| 3 | Model selection helper | `[x]` | Pure `chooseExecutionModel` in `src/executionRouter.ts`; preference + safety floors + pool fallback chain; tests in `tests/executionRouter.test.ts`. |
 | 4 | Cache-safe router wiring | `[ ]` | Replace direct `mapModel(...)` resolution in `src/index.ts`. |
 | 5 | Observability | `[ ]` | Add structured route logs and optional surfaced decision. |
 | 6 | Optional cache-aware route memory | `[d]` | Deferred until logs prove same-skill model churn matters. |
@@ -82,7 +82,7 @@ Tasks:
 
 - `[x]` Validate nested `executionRouting` settings in `loadSettings(...)`.
 - `[x]` Preserve existing behavior when `executionRouting.enabled=false`.
-- `[ ]` Ensure all configured model IDs still pass through `mapModel(...)` before execution. *(deferred to Phase 3 — pool resolution lives in `chooseExecutionModel`)*
+- `[x]` Ensure all configured model IDs still pass through `mapModel(...)` before execution. *(landed in Phase 3 via `chooseExecutionModel`)*
 - `[x]` Re-export new public types and `DEFAULT_EXECUTION_ROUTING` from `src/index.ts`.
 - `[x]` Return fresh nested settings from `loadSettings(...)` to avoid shared mutation of defaults.
 
@@ -137,6 +137,7 @@ Tasks:
   }
   ```
 
+- `[x]` Freeze `DEFAULT_EXECUTION_ROUTE` so exported fallback metadata cannot be mutated by consumers.
 - `[x]` Keep old Judge responses compatible where possible.
 
 Files likely touched:
@@ -151,8 +152,8 @@ Goal: isolate model-routing policy in a pure, well-tested helper.
 
 Tasks:
 
-- `[ ]` Create `src/executionRouter.ts`.
-- `[ ]` Implement `chooseExecutionModel(...)`:
+- `[x]` Create `src/executionRouter.ts`.
+- `[x]` Implement `chooseExecutionModel(...)`:
 
   ```ts
   export function chooseExecutionModel(input: {
@@ -167,21 +168,21 @@ Tasks:
   }
   ```
 
-- `[ ]` Apply `executionRouting.enabled`.
-- `[ ]` Apply `skillModelPolicy`.
-- `[ ]` Apply base tier mapping.
-- `[ ]` Apply `preference` adjustment.
-- `[ ]` Apply safety floors:
+- `[x]` Apply `executionRouting.enabled`.
+- `[x]` Apply `skillModelPolicy`.
+- `[x]` Apply base tier mapping.
+- `[x]` Apply `preference` adjustment.
+- `[x]` Apply safety floors:
   - `architecture_change` never below `frontier`
   - `multi_file_edit` never below `balanced`
   - `unknown` risk with confidence `< 0.5` never below `balanced`
-- `[ ]` Implement missing-pool-entry fallback:
+- `[x]` Implement missing-pool-entry fallback:
   - missing `cheap` -> `balanced` -> `frontier`
   - missing `balanced` -> `frontier` -> `cheap`
   - missing `frontier` -> `balanced` -> `cheap`
-- `[ ]` Resolve selected models through `mapModel(...)`.
-- `[ ]` Enforce `allowedProviderPrefixes` through `mapModel(...)`.
-- `[ ]` Return display/log reason without mutating sub-agent prompts.
+- `[x]` Resolve selected models through `mapModel(...)`.
+- `[x]` Enforce `allowedProviderPrefixes` through `mapModel(...)`.
+- `[x]` Return display/log reason without mutating sub-agent prompts.
 
 Files likely touched:
 
@@ -337,14 +338,14 @@ Add or extend tests for:
 - `[x]` Route parsing/coercion.
 - `[x]` Malformed route metadata fallback.
 - `[x]` Missing route metadata fallback.
-- `[ ]` Preference adjustment.
-- `[ ]` Safety floors.
-- `[ ]` Missing model-tier fallback.
-- `[ ]` `skillModelPolicy="pin"`.
-- `[ ]` `skillModelPolicy="ignore"`.
+- `[x]` Preference adjustment.
+- `[x]` Safety floors.
+- `[x]` Missing model-tier fallback.
+- `[x]` `skillModelPolicy="pin"`.
+- `[x]` `skillModelPolicy="ignore"`.
 - `[d]` `skillModelPolicy="prefer"` policy behavior; deferred beyond MVP.
 - `[x]` `skillModelPolicy="prefer"` is rejected by config validation until implemented.
-- `[ ]` Provider allowlist enforcement on pool models.
+- `[x]` Provider allowlist enforcement on pool models.
 - `[ ]` Router integration message when `surfaceDecision=true`.
 - `[ ]` Router integration message remains minimal when `surfaceDecision=false`.
 - `[ ]` Cache-safety invariant: one resolved execution model per sub-agent run.
@@ -406,7 +407,7 @@ Target outcomes after tuning:
 As of 2026-05-05:
 
 - Existing code still resolves execution model from `SKILL.md` frontmatter through `mapModel(...)`.
-- Existing Actor/Judge loop returns only `brief`, `rubric`, `passed`, and `iterations`.
+- Existing Actor/Judge loop returns `brief`, `rubric`, `passed`, `iterations`, and an always-populated `route`.
 - Adaptive execution routing has not been wired into execution yet.
 - Cache-efficiency requirements are documented but not yet enforced by tests.
 
@@ -431,7 +432,9 @@ Relevant current files:
 | 2026-05-05 | Created implementation status tracker | AI assistant | This file. |
 | 2026-05-05 | Phase 1 landed: execution-routing types + config + validation + tests | AI assistant | `src/types.ts`, `src/config.ts`, `tests/config.test.ts`. 75/75 tests pass; lint clean. |
 | 2026-05-05 | Phase 2 landed: Judge `executionRoute` schema + `coerceExecutionRoute` + `JudgeOutcome.route` | AI assistant | `src/actorJudge.ts`, `tests/actorJudge.test.ts`. 84/84 tests pass; lint clean. |
+| 2026-05-05 | Phase 3 landed: pure `chooseExecutionModel` with preference, safety floors, pool fallback, allowlist | AI assistant | `src/executionRouter.ts`, `tests/executionRouter.test.ts`. 105/105 tests pass; lint clean. |
 | 2026-05-05 | Addressed Phase 1 review fixes | AI assistant | Re-exported public types/defaults, deep-cloned loaded settings, removed unused variable, deferred/rejected `prefer`, updated tracker. |
+| 2026-05-05 | Addressed Phase 2 review fixes | AI assistant | Froze `DEFAULT_EXECUTION_ROUTE`, added partially malformed route integration test, refreshed status notes. |
 
 ## 11. Definition of done
 

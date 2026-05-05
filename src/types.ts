@@ -128,6 +128,39 @@ export interface RouterSettings {
    * rejected at mapping time. Empty array = allow all (legacy behaviour).
    */
   allowedProviderPrefixes: string[];
+  /** Adaptive execution-model routing config. Disabled by default. */
+  executionRouting: ExecutionRoutingSettings;
+}
+
+export type ExecutionRoutingPreference =
+  | "preferCheap"
+  | "balanced"
+  | "preferBest";
+
+export type ExecutionRoutingTier = "cheap" | "balanced" | "frontier";
+
+export type SkillModelPolicy = "pin" | "prefer" | "ignore";
+
+export interface ExecutionRoutingSettings {
+  enabled: boolean;
+  preference: ExecutionRoutingPreference;
+  surfaceDecision: boolean;
+  skillModelPolicy: SkillModelPolicy;
+  models: Partial<Record<ExecutionRoutingTier, string>>;
+}
+
+export interface ExecutionRoute {
+  tier: ExecutionRoutingTier;
+  complexity: "low" | "medium" | "high";
+  risk:
+    | "read_only"
+    | "small_edit"
+    | "multi_file_edit"
+    | "architecture_change"
+    | "unknown";
+  /** 0..1 */
+  confidence: number;
+  reason: string;
 }
 
 export interface ParsedSkill {

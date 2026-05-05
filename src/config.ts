@@ -1,5 +1,24 @@
 import { readFileSync, existsSync } from "node:fs";
-import type { PiHost, RouterSettings } from "./types.js";
+import type {
+  ExecutionRoutingPreference,
+  ExecutionRoutingSettings,
+  ExecutionRoutingTier,
+  PiHost,
+  RouterSettings,
+  SkillModelPolicy,
+} from "./types.js";
+
+export const DEFAULT_EXECUTION_ROUTING: ExecutionRoutingSettings = {
+  enabled: false,
+  preference: "balanced",
+  surfaceDecision: false,
+  skillModelPolicy: "pin",
+  models: {
+    cheap: "anthropic/claude-3-5-haiku",
+    balanced: "anthropic/claude-3-5-sonnet",
+    frontier: "anthropic/claude-3-7-sonnet",
+  },
+};
 
 export const DEFAULT_SETTINGS: RouterSettings = {
   defaultProvider: "openrouter",
@@ -14,7 +33,26 @@ export const DEFAULT_SETTINGS: RouterSettings = {
   overflowCeilingBytes: 25_000,
   auggieBinPath: "auggie",
   allowedProviderPrefixes: [],
+  executionRouting: DEFAULT_EXECUTION_ROUTING,
 };
+
+const PREFERENCE_VALUES: ReadonlySet<ExecutionRoutingPreference> = new Set([
+  "preferCheap",
+  "balanced",
+  "preferBest",
+]);
+
+const POLICY_VALUES: ReadonlySet<SkillModelPolicy> = new Set([
+  "pin",
+  "prefer",
+  "ignore",
+]);
+
+const TIER_VALUES: ReadonlySet<ExecutionRoutingTier> = new Set([
+  "cheap",
+  "balanced",
+  "frontier",
+]);
 
 interface PiSettingsFile {
   auggieRouter?: Partial<RouterSettings>;
@@ -54,6 +92,119 @@ function assertNonEmptyString(val: unknown, key: string): string {
     throw new Error(`auggieRouter.${key}: must be a non-empty string`);
   }
   return s;
+}
+
+function assertBool(val: unknown, key: string): boolean {
+  if (typeof val !== "boolean") {
+    throw new Error(`auggieRouter.${key}: expected boolean, got ${typeof val}`);
+  }
+  return val;
+}
+
+function assertEnum<T extends string>(
+  val: unknown,
+  key: string,
+  allowed: ReadonlySet<T>
+): T {
+  const s = assertString(val, key);
+  if (!(allowed as ReadonlySet<string>).has(s)) {
+    const list = Array.from(allowed).join("|");
+    throw new Error(`auggieRouter.${key}: must be one of ${list}, got "${s}"`);
+  }
+  return s as T;
+}
+
+function validateExecutionRoutingModels(
+  raw: unknown,
+  warnings: string[]
+): Partial<Record<ExecutionRoutingTier, string>> | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    warnings.push(
+      `auggieRouter.executionRouting.models: expected object, got ${Array.isArray(raw) ? "array" : typeof raw}`
+    );
+    return undefined;
+  }
+  const out: Partial<Record<ExecutionRoutingTier, string>> = {};
+  for (const [tier, model] of Object.entries(raw as Record<string, unknown>)) {
+    if (!(TIER_VALUES as ReadonlySet<string>).has(tier)) {
+      warnings.push(
+        `auggieRouter.executionRouting.models.${tier}: unknown tier (allowed: cheap|balanced|frontier)`
+      );
+      continue;
+    }
+    try {
+      out[tier as ExecutionRoutingTier] = assertNonEmptyString(
+        model,
+        `executionRouting.models.${tier}`
+      );
+    } catch (e) {
+      warnings.push((e as Error).message);
+    }
+  }
+  return out;
+}
+
+function validateExecutionRouting(
+  raw: unknown,
+  warnings: string[]
+): ExecutionRoutingSettings | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    warnings.push(
+      `auggieRouter.executionRouting: expected object, got ${Array.isArray(raw) ? "array" : typeof raw}`
+    );
+    return undefined;
+  }
+  const r = raw as Record<string, unknown>;
+  const out: ExecutionRoutingSettings = {
+    ...DEFAULT_EXECUTION_ROUTING,
+    models: { ...DEFAULT_EXECUTION_ROUTING.models },
+  };
+  if ("enabled" in r) {
+    try {
+      out.enabled = assertBool(r.enabled, "executionRouting.enabled");
+    } catch (e) {
+      warnings.push((e as Error).message);
+    }
+  }
+  if ("preference" in r) {
+    try {
+      out.preference = assertEnum(
+        r.preference,
+        "executionRouting.preference",
+        PREFERENCE_VALUES
+      );
+    } catch (e) {
+      warnings.push((e as Error).message);
+    }
+  }
+  if ("surfaceDecision" in r) {
+    try {
+      out.surfaceDecision = assertBool(
+        r.surfaceDecision,
+        "executionRouting.surfaceDecision"
+      );
+    } catch (e) {
+      warnings.push((e as Error).message);
+    }
+  }
+  if ("skillModelPolicy" in r) {
+    try {
+      out.skillModelPolicy = assertEnum(
+        r.skillModelPolicy,
+        "executionRouting.skillModelPolicy",
+        POLICY_VALUES
+      );
+    } catch (e) {
+      warnings.push((e as Error).message);
+    }
+  }
+  if ("models" in r) {
+    const validated = validateExecutionRoutingModels(r.models, warnings);
+    if (validated !== undefined) {
+      out.models = { ...DEFAULT_EXECUTION_ROUTING.models, ...validated };
+    }
+  }
+  return out;
 }
 
 function assertNonEmptyStringArray(val: unknown, key: string): string[] {
@@ -176,6 +327,12 @@ function validateSettings(
       out.allowedProviderPrefixes = assertNonEmptyStringArray(raw.allowedProviderPrefixes, "allowedProviderPrefixes");
     } catch (e) {
       warnings.push((e as Error).message);
+    }
+  }
+  if ("executionRouting" in raw) {
+    const validated = validateExecutionRouting(raw.executionRouting, warnings);
+    if (validated !== undefined) {
+      out.executionRouting = validated;
     }
   }
 

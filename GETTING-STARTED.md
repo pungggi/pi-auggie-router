@@ -1,6 +1,6 @@
 # Getting Started
 
-This guide walks you through your first `/skill:` workflow inside the **pi.dev terminal** (`@mariozechner/pi-coding-agent`).
+This guide walks you through your first `/skill` workflow inside the **pi.dev terminal** (`@mariozechner/pi-coding-agent`).
 
 `pi-auggie-router` ships as a pi.dev extension. Install once with `pi install npm:pi-auggie-router` — pi auto-loads it on every launch from there on.
 
@@ -44,25 +44,48 @@ Other sources also accepted (`git:`, `https:`, local path) — see `pi install -
 
 ## Step 1: Verify the router is live
 
-In the pi.dev terminal, type:
+On launch you should see three startup warnings from the bridge:
 
 ```
-/skill:does-not-exist
+[pi-auggie-router/bridge] [warn] ExtensionAPI.setInputLocked() not found - falling back to sendMessage or stderr for input locking.
+[pi-auggie-router/bridge] [warn] onUserInput has limited support via extension bridge. /skill: interception may require pi.registerCommand fallback.
+[pi-auggie-router/bridge] [warn] onBeforeMessage is not supported via extension bridge. Q&A fallback will not work.
 ```
 
-You should see:
+These confirm the extension loaded. They are expected — pi.dev's extension API does not currently expose the host hooks the router would prefer. Read [Bridge limitations](#bridge-limitations) below before going further.
 
-```
-[System]: Skill "does-not-exist" not found.
-```
-
-That confirms the `/skill:` interceptor is mounted. If instead the main agent replies in prose ("I don't recognize that skill…"), the extension did not load — re-check Step 0. The bridge sometimes can't intercept the `/skill:` prefix; in that case use the registered slash command form:
+Then run:
 
 ```
 /skill does-not-exist
 ```
 
-Same null-result behavior, but routed through `pi.registerCommand` instead of `onUserInput`.
+(Note: **no colon**. The slash-command form goes through `pi.registerCommand`, which is the only reliable interception path.) You should see:
+
+```
+[System]: Skill "does-not-exist" not found.
+```
+
+If instead pi prints `Unknown command: /skill`, the extension did not register — the most common cause is that you installed an older version that predates the `pi.extensions` manifest field. Run:
+
+```bash
+pi update pi-auggie-router
+pi list                        # confirm version ≥ 1.2.0
+```
+
+The `/skill:<name>` (with colon) form **does not work** through the extension bridge — it falls through to the main agent and is interpreted as plain text.
+
+## Bridge limitations
+
+pi.dev's `ExtensionAPI` does not expose every host hook the router would use if mounted directly. Three concrete consequences:
+
+| Warn at startup                   | What it means                                                                                                                          | Workaround                                                                                       |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `setInputLocked() not found`      | Input box is **not** locked while a skill runs. You can keep typing — those messages will queue or interleave.                         | Cosmetic only. Don't type while a skill executes.                                                |
+| `onUserInput has limited support` | The `/skill:<name>` (colon) prefix cannot be intercepted before the model sees it.                                                     | Use `/skill <name>` (slash-command form). Same router, just a different entry path.              |
+| `onBeforeMessage not supported`   | The Q&A clarification fallback (Judge → user → resume execution) cannot capture your reply. If the Judge needs clarification, it dies. | Write skills tight enough that the Judge passes on the first try. See troubleshooting below.     |
+
+These limitations are pi.dev-side; the router itself supports all three hooks via the `PiHost` contract when mounted directly. If/when pi-coding-agent grows full extension hooks, the warns disappear.
 
 ## Step 2: Configure (optional)
 
@@ -171,27 +194,27 @@ Constraints:
 In the pi.dev terminal:
 
 ```
-/skill:refactor Clean up src/utils/auth.ts
+/skill refactor Clean up src/utils/auth.ts
 ```
 
 What happens, in order:
 
-1. Router intercepts `/skill:refactor`, loads `.pi/skills/refactor/SKILL.md`.
+1. Router intercepts `/skill refactor`, loads `.pi/skills/refactor/SKILL.md`.
 2. Pre-flight check: `auggie status` must be green.
 3. **Actor/Judge loop** runs against the routing model — turns your one-liner into a structured brief and decides if more context is needed.
 4. **Execution model** is picked: `model:` frontmatter, or adaptive routing if enabled.
 5. A sub-agent spins up with the Augment MCP attached and is forced to call `codebase-retrieval` for context — no raw file dumps.
 6. The sub-agent applies the skill instructions and returns a synthesized result.
-7. Result lands in the main thread. Your editor unlocks.
+7. Result lands in the main thread.
 
-While the skill runs, the input box is locked. The system messages tell you what stage you are in.
+While the skill runs, system messages tell you what stage you are in. Note that under the pi.dev bridge the input box is **not** locked (see [Bridge limitations](#bridge-limitations)) — don't type while a skill executes.
 
 ## Step 5: Example session
 
 You type:
 
 ```
-/skill:test Add tests for src/services/user.ts
+/skill test Add tests for src/services/user.ts
 ```
 
 Terminal shows:
@@ -261,13 +284,13 @@ Check the path. Workspace path must be exactly `.pi/skills/myskill/SKILL.md` (ca
 [System]: Missing context for skill. Which files should I focus on?
 ```
 
-The Judge couldn't pin down the scope. Type the answer as a normal message — do not re-issue `/skill:`:
+The Judge couldn't pin down the scope.
 
-```
-src/utils/auth.ts and src/middleware/auth.ts
-```
+> **Important under pi.dev bridge:** the Q&A capture path uses `onBeforeMessage`, which the bridge does not expose (see startup warn `onBeforeMessage is not supported`). Your typed reply will be sent to the main agent as a normal message instead of being attached to the brief. The skill run will time out at `qaTimeoutMs` and abort.
+>
+> **Workaround:** re-run with a more specific input, e.g. `/skill refactor src/utils/auth.ts and src/middleware/auth.ts`. Tighten the skill prompt so the Judge passes without clarification.
 
-Your reply is appended to the brief as a clarification and execution proceeds directly (no Actor/Judge re-run).
+When the router is mounted directly in a host (not via the bridge), the typed reply is appended to the brief as a clarification and execution proceeds without re-running Actor/Judge.
 
 ### Sub-agent timeout
 
@@ -322,7 +345,7 @@ Either change the skill's `model:` to an allowed provider, or extend the allowli
 
 3. Run it in the pi.dev terminal:
    ```
-   /skill:docs Document src/api/routes.ts
+   /skill docs Document src/api/routes.ts
    ```
 
 4. Observe:

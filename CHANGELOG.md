@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] — 2026-05-06
+
+### Documentation
+
+- **GETTING-STARTED.md** — document pi.dev extension-bridge limitations end-to-end:
+  - Use `/skill <name>` (slash-command form), not `/skill:<name>`. The colon form is not interceptable through the bridge.
+  - New "Bridge limitations" section enumerates the three startup warns (`setInputLocked` missing, `onUserInput` limited, `onBeforeMessage` unsupported), what each means in practice, and the workaround.
+  - Q&A clarification troubleshooting now flags that under the bridge the typed reply is not captured — clarification path effectively dies, so re-run with a more specific input.
+  - All sample commands updated from `/skill:<name>` to `/skill <name>`.
+  - Added `pi update pi-auggie-router` instructions when `Unknown command: /skill` appears (older versions predate the `pi.extensions` manifest).
+
 ## [1.2.0] — 2026-05-06
 
 ### Added

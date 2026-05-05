@@ -30,6 +30,29 @@ export interface RouterHandle {
 export interface CreateRouterOptions {
   /** Override the auggie pre-flight (used in tests). */
   preflight?: () => Promise<{ ok: boolean; detail: string }>;
+
+  /**
+   * Additional text appended to every sub-agent system prompt, after the
+   * AUGGIE_DIRECTIVE. Use this to inject domain-specific rules (e.g. DDD
+   * enforcement) into sub-agent context.
+   *
+   * Accepts a static string (evaluated once at mount time) or a callback
+   * (evaluated lazily at each execution). Use the callback form when the
+   * appendix depends on mutable state (e.g. active bounded context).
+   */
+  systemPromptAppendix?: string | (() => string);
+
+  /**
+   * Additional MCP servers to attach to the sub-agent alongside auggie.
+   * These are appended after the auggie MCP server spec.
+   */
+  additionalMcpServers?: import("./types.js").MCPServerSpec[];
+
+  /**
+   * Additional tool result middleware functions. These run after the
+   * built-in overflow middleware, in the order given.
+   */
+  additionalToolMiddleware?: import("./types.js").ToolResultMiddleware[];
 }
 
 const LOCK_REASON = "pi-auggie-router: skill execution in progress";
@@ -115,6 +138,9 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
           skill,
           brief,
           resolvedModel,
+          systemPromptAppendix: opts.systemPromptAppendix,
+          additionalMcpServers: opts.additionalMcpServers,
+          additionalToolMiddleware: opts.additionalToolMiddleware,
         });
         host.postAssistantMessage(result.finalText);
         if (result.stoppedReason !== "completed") {
@@ -222,7 +248,9 @@ export {
   SkillNotFoundError,
   InvalidSkillNameError,
 } from "./parser.js";
-export { makeOverflowMiddleware, redactSecrets, runAuggieStatus, AUGGIE_DIRECTIVE, AUGGIE_MCP_NAME, AUGGIE_TOOL_NAME } from "./auggie.js";
+export { composeMiddleware, makeOverflowMiddleware, redactSecrets, runAuggieStatus, AUGGIE_DIRECTIVE, AUGGIE_MCP_NAME, AUGGIE_TOOL_NAME } from "./auggie.js";
+export { createExtensionBridge } from "./extensionBridge.js";
+export type { BridgeOptions } from "./extensionBridge.js";
 export { runActorJudgeLoop } from "./actorJudge.js";
 export { RouterState } from "./state.js";
 export type {

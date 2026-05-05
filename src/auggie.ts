@@ -102,6 +102,24 @@ export function runAuggieStatus(
   });
 }
 
+/**
+ * Compose multiple ToolResultMiddleware functions into a single middleware.
+ * The first middleware to return `{ block: true }` wins; remaining middleware
+ * is not called. Middleware order is significant: earlier middleware has
+ * higher priority.
+ */
+export function composeMiddleware(
+  ...middlewares: ToolResultMiddleware[]
+): ToolResultMiddleware {
+  return (ctx, rawResult) => {
+    for (const mw of middlewares) {
+      const result = mw(ctx, rawResult);
+      if (result.block) return result;
+    }
+    return { block: false };
+  };
+}
+
 export function buildAuggieMcpSpec(
   settings: Pick<RouterSettings, "auggieBinPath">
 ): MCPServerSpec {

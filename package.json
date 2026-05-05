@@ -1,7 +1,9 @@
 {
   "name": "pi-auggie-router",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Opinionated sub-agent router for Pi: tightly couples SKILL.md execution with the Augment Code (auggie) Context Engine.",
+  "author": "pi-auggie-router contributors",
+  "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -16,6 +18,14 @@
     "README.md",
     "LICENSE"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pungggi/pi-auggie-router.git"
+  },
+  "homepage": "https://github.com/pungggi/pi-auggie-router#readme",
+  "bugs": {
+    "url": "https://github.com/pungggi/pi-auggie-router/issues"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "clean": "rimraf dist",
@@ -44,7 +54,6 @@
     "@types/node": "20.11.0",
     "rimraf": "5.0.5",
     "tsx": "4.21.0",
-        "typescript": "5.8.3"
-  },
-  "license": "MIT"
+    "typescript": "5.8.3"
+  }
 }

@@ -389,6 +389,49 @@ describe("chooseExecutionModel — pool resolution", () => {
   });
 });
 
+describe("chooseExecutionModel — minimum tier floor", () => {
+  it("prevents preferCheap from downgrading below the requested minimum tier", () => {
+    const out = chooseExecutionModel({
+      skill: makeSkill(undefined),
+      route: makeRoute({
+        tier: "balanced",
+        complexity: "medium",
+        risk: "read_only",
+        confidence: 0.95,
+      }),
+      settings: withRouting({
+        enabled: true,
+        skillModelPolicy: "ignore",
+        preference: "preferCheap",
+      }),
+      minimumTier: "balanced",
+    });
+    assert.equal(out.tier, "balanced");
+    assert.equal(out.model, "openrouter/anthropic/claude-3-5-sonnet");
+  });
+
+  it("does not fall back below minimumTier when preferred pool entries are unavailable", () => {
+    const out = chooseExecutionModel({
+      skill: makeSkill("anthropic/claude-3-5-haiku"),
+      route: makeRoute({ tier: "balanced", risk: "small_edit" }),
+      settings: withRouting({
+        enabled: true,
+        skillModelPolicy: "ignore",
+        models: {
+          cheap: "anthropic/claude-3-5-haiku",
+          balanced: undefined,
+          frontier: undefined,
+        },
+      }),
+      minimumTier: "balanced",
+    });
+    assert.equal(out.source, "fallback");
+    assert.equal(out.tier, "balanced");
+    assert.equal(out.model, "openrouter/anthropic/claude-3-5-sonnet");
+    assert.match(out.reason, /legacy default model resolution/);
+  });
+});
+
 describe("chooseExecutionModel — defensive input handling", () => {
   it("treats unsupported runtime skillModelPolicy values as ignore", () => {
     const settings = withRouting({

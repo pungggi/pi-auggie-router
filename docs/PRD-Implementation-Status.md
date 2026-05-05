@@ -210,7 +210,7 @@ Tasks:
   - `AUGGIE_DIRECTIVE`
   - optional host appendix
 - `[x]` Preserve existing behavior when routing is disabled.
-- `[x]` Apply safety floor: bump cheap→balanced when Judge did not pass.
+- `[x]` Apply safety floor: enforce `minimumTier="balanced"` when Judge did not pass so `preferCheap` cannot downgrade the selected model.
 
 Files touched:
 
@@ -224,7 +224,7 @@ Tasks:
 
 - `[x]` Add optional host-visible route decision when `executionRouting.surfaceDecision=true`.
 - `[x]` Preserve current minimal execution message when `surfaceDecision=false`.
-- `[x]` Emit structured local log through `host.log?.("info", ...)`:
+- `[x]` Emit structured local log through `host.log?.("info", ...)` using the effective route used for model selection:
 
   ```json
   {
@@ -242,6 +242,8 @@ Tasks:
 - `[x]` Do not log raw user prompt content.
 - `[x]` Do not log raw chat history.
 - `[x]` Do not log secrets or file-system paths beyond existing safe behavior.
+- `[x]` Surface decisions for routed, pinned SKILL.md, and fallback/default model sources without misusing the neutral `tier="balanced"` sentinel.
+- `[x]` Sanitize surfaced decision reasons to one line before posting system messages.
 
 Files touched:
 
@@ -433,6 +435,7 @@ Relevant current files:
 | 2026-05-05 | Addressed Phase 2 review fixes | AI assistant | Froze `DEFAULT_EXECUTION_ROUTE`, added partially malformed route integration test, refreshed status notes. |
 | 2026-05-05 | Phase 4 landed: cache-safe router wiring | AI assistant | `src/index.ts` uses `chooseExecutionModel` once per run; safety floor for unpassed judge; 117/117 tests pass. |
 | 2026-05-05 | Phase 5 landed: observability | AI assistant | Structured route logs via `host.log`; optional `surfaceDecision` system message; prompt cache preserved. |
+| 2026-05-05 | Addressed Phase 4/5 review fixes | AI assistant | Added `minimumTier`, extracted route/message/log helpers, used effective route consistently, sanitized/surfaced all decision sources. |
 
 ## 11. Definition of done
 

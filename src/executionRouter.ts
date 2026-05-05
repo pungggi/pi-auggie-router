@@ -37,6 +37,8 @@ export interface ChooseExecutionModelInput {
   skill: ParsedSkill;
   route: ExecutionRoute | undefined;
   settings: RouterSettings;
+  /** Optional hard floor applied after preference/safety adjustment. */
+  minimumTier?: ExecutionRoutingTier;
 }
 
 const FALLBACK_CHAIN: Record<ExecutionRoutingTier, ExecutionRoutingTier[]> = {
@@ -44,6 +46,20 @@ const FALLBACK_CHAIN: Record<ExecutionRoutingTier, ExecutionRoutingTier[]> = {
   balanced: ["balanced", "frontier", "cheap"],
   frontier: ["frontier", "balanced", "cheap"],
 };
+
+const TIER_RANK: Record<ExecutionRoutingTier, number> = {
+  cheap: 0,
+  balanced: 1,
+  frontier: 2,
+};
+
+function maxTier(
+  tier: ExecutionRoutingTier,
+  minimumTier: ExecutionRoutingTier | undefined
+): ExecutionRoutingTier {
+  if (!minimumTier) return tier;
+  return TIER_RANK[tier] >= TIER_RANK[minimumTier] ? tier : minimumTier;
+}
 
 /**
  * Apply PRD §10.2 preference adjustment to a base tier.
@@ -108,10 +124,12 @@ function applySafetyFloors(
  */
 function resolveTier(
   selectedTier: ExecutionRoutingTier,
-  settings: RouterSettings
+  settings: RouterSettings,
+  minimumTier?: ExecutionRoutingTier
 ): { tier: ExecutionRoutingTier; model: string } | null {
   const pool = settings.executionRouting.models;
   for (const tier of FALLBACK_CHAIN[selectedTier]) {
+    if (minimumTier && TIER_RANK[tier] < TIER_RANK[minimumTier]) continue;
     const raw = pool[tier];
     if (!raw || !raw.trim()) continue;
     try {
@@ -176,8 +194,9 @@ export function chooseExecutionModel(
   // 3. Adaptive selection: route → preference → safety floors → pool resolve.
   const baseTier = route.tier;
   const preferred = applyPreference(baseTier, route, cfg.preference);
-  const floored = applySafetyFloors(preferred, route);
-  const resolved = resolveTier(floored, settings);
+  const safetyFloored = applySafetyFloors(preferred, route);
+  const floored = maxTier(safetyFloored, input.minimumTier);
+  const resolved = resolveTier(floored, settings, input.minimumTier);
 
   if (resolved) {
     return {
@@ -190,15 +209,16 @@ export function chooseExecutionModel(
 
   // 4. Pool produced nothing usable — fall back to the legacy mapModel path
   //    so the skill still runs. PRD §10.4 last clause.
+  const fallbackRawModel = input.minimumTier ? undefined : skill.rawModel;
   const fallbackModel = mapModel(
-    skill.rawModel,
+    fallbackRawModel,
     settings.defaultProvider,
     settings.allowedProviderPrefixes
   );
   return {
     model: fallbackModel,
-    tier: "balanced",
-    reason: skill.rawModel && skill.rawModel.trim()
+    tier: input.minimumTier ?? "balanced",
+    reason: fallbackRawModel && fallbackRawModel.trim()
       ? "Execution-routing pool unavailable; used legacy SKILL.md model resolution."
       : "Execution-routing pool unavailable; used legacy default model resolution.",
     source: "fallback",

@@ -1,7 +1,10 @@
 import { runActorJudgeLoop } from "./actorJudge.js";
 import { redactSecrets, runAuggieStatus } from "./auggie.js";
 import { loadSettings } from "./config.js";
-import { chooseExecutionModel } from "./executionRouter.js";
+import {
+  chooseExecutionModel,
+  type ExecutionRouteSelection,
+} from "./executionRouter.js";
 import {
   InvalidSkillNameError,
   loadSkill,
@@ -14,6 +17,7 @@ import type {
   JudgeRubric,
   ParsedSkill,
   PiHost,
+  ExecutionRoute,
   RouterSettings,
   SkillBrief,
 } from "./types.js";
@@ -56,6 +60,62 @@ export interface CreateRouterOptions {
 }
 
 const LOCK_REASON = "pi-auggie-router: skill execution in progress";
+
+function sanitizeOneLine(text: string, maxChars = 240): string {
+  return text.replace(/\s+/g, " ").trim().slice(0, maxChars);
+}
+
+function applyUnpassedJudgeRouteFloor(
+  route: ExecutionRoute,
+  passed: boolean
+): { route: ExecutionRoute; minimumTier?: "balanced" } {
+  if (passed) return { route };
+  const flooredRoute: ExecutionRoute = route.tier === "cheap"
+    ? { ...route, tier: "balanced" }
+    : route;
+  return { route: flooredRoute, minimumTier: "balanced" };
+}
+
+function makeRouteLogPayload(input: {
+  skillName: string;
+  originalRoute: ExecutionRoute;
+  effectiveRoute: ExecutionRoute;
+  selection: ExecutionRouteSelection;
+}): string {
+  const { skillName, originalRoute, effectiveRoute, selection } = input;
+  return JSON.stringify({
+    event: "auggie-router.execution-route",
+    skill: skillName,
+    tier: selection.tier,
+    model: selection.model,
+    source: selection.source,
+    complexity: effectiveRoute.complexity,
+    risk: effectiveRoute.risk,
+    confidence: effectiveRoute.confidence,
+    routeTier: originalRoute.tier,
+    effectiveTier: effectiveRoute.tier,
+  });
+}
+
+function formatExecutionMessage(input: {
+  skillName: string;
+  selection: ExecutionRouteSelection;
+  surfaceDecision: boolean;
+}): string {
+  const { skillName, selection, surfaceDecision } = input;
+  if (!surfaceDecision) {
+    return `[System]: ⚙️ Executing /skill:${skillName} (Auggie semantic retrieval running...)`;
+  }
+
+  const reason = sanitizeOneLine(selection.reason);
+  if (selection.source === "execution-routing") {
+    return `[System]: ⚙️ Executing /skill:${skillName} using ${selection.tier} model ${selection.model}. Reason: ${reason}`;
+  }
+  if (selection.source === "skill-model") {
+    return `[System]: ⚙️ Executing /skill:${skillName} using SKILL.md model ${selection.model}. Reason: ${reason}`;
+  }
+  return `[System]: ⚙️ Executing /skill:${skillName} using fallback model ${selection.model}. Reason: ${reason}`;
+}
 
 export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): RouterHandle {
   const settings = loadSettings(host);
@@ -126,39 +186,33 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
         return;
       }
 
-      // Phase 4: compute execution route with safety floor for unpassed judge.
-      let route = outcome.route;
-      if (!outcome.passed && route.tier === "cheap") {
-        route = { ...route, tier: "balanced" };
-      }
+      const { route, minimumTier } = applyUnpassedJudgeRouteFloor(
+        outcome.route,
+        outcome.passed
+      );
 
-      const selection = chooseExecutionModel({ skill, route, settings });
+      const selection = chooseExecutionModel({
+        skill,
+        route,
+        settings,
+        minimumTier,
+      });
 
       state.beginExecution();
       host.setInputLocked(true, LOCK_REASON);
 
-      // Phase 5: structured route log.
-      log("info", JSON.stringify({
-        event: "auggie-router.execution-route",
-        skill: skill.name,
-        tier: selection.tier,
-        model: selection.model,
-        source: selection.source,
-        complexity: outcome.route.complexity,
-        risk: outcome.route.risk,
-        confidence: outcome.route.confidence,
+      log("info", makeRouteLogPayload({
+        skillName: skill.name,
+        originalRoute: outcome.route,
+        effectiveRoute: route,
+        selection,
       }));
 
-      // Phase 5: optional surfaced decision message.
-      if (settings.executionRouting.surfaceDecision && selection.source === "execution-routing") {
-        host.postSystemMessage(
-          `[System]: ⚙️ Executing /skill:${skill.name} using ${selection.tier} model ${selection.model}. Reason: ${outcome.route.reason}`
-        );
-      } else {
-        host.postSystemMessage(
-          `[System]: ⚙️ Executing /skill:${skill.name} (Auggie semantic retrieval running...)`
-        );
-      }
+      host.postSystemMessage(formatExecutionMessage({
+        skillName: skill.name,
+        selection,
+        surfaceDecision: settings.executionRouting.surfaceDecision,
+      }));
 
       const resolvedModel = selection.model;
       try {

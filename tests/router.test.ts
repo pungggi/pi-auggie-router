@@ -508,7 +508,8 @@ describe("createRouter end-to-end", () => {
       );
       assert.ok(sys, "expected surfaced routing decision");
       assert.match(sys!.text, /openrouter\/test\/cheap/);
-      assert.match(sys!.text, /Read-only lookup task/);
+      assert.match(sys!.text, /route cheap/);
+      assert.ok(!sys!.text.includes("Read-only lookup task."));
     } finally {
       h.cleanup();
     }
@@ -564,6 +565,8 @@ describe("createRouter end-to-end", () => {
       assert.equal(data.complexity, "low");
       assert.equal(data.risk, "read_only");
       assert.equal(data.confidence, 0.9);
+      assert.equal(data.routeTier, "cheap");
+      assert.equal(data.effectiveTier, "cheap");
     } finally {
       h.cleanup();
     }
@@ -593,10 +596,16 @@ describe("createRouter end-to-end", () => {
     }
   });
 
-  it("honours pinned skill model when skillModelPolicy is pin", async () => {
+  it("surfaces pinned skill model when surfaceDecision is true", async () => {
     const h = harness({
       llmResponses: passingPairWithRoute(CHEAP_READ_ONLY_ROUTE),
-      settingsOverride: ADAPTIVE_ROUTING_SETTINGS, // skillModelPolicy: "pin" (default)
+      settingsOverride: {
+        ...ADAPTIVE_ROUTING_SETTINGS,
+        executionRouting: {
+          ...ADAPTIVE_ROUTING_SETTINGS.executionRouting,
+          surfaceDecision: true,
+        },
+      },
     });
     try {
       writeSkill(
@@ -613,6 +622,12 @@ describe("createRouter end-to-end", () => {
         "openrouter/anthropic/claude-3-7-sonnet",
         "should use pinned skill model, not pool"
       );
+      const sys = h.messages.find((m) =>
+        m.text.includes("using SKILL.md model")
+      );
+      assert.ok(sys, "expected surfaced pinned model decision");
+      assert.match(sys!.text, /openrouter\/anthropic\/claude-3-7-sonnet/);
+      assert.ok(!sys!.text.includes("using balanced model"));
     } finally {
       h.cleanup();
     }
@@ -649,7 +664,7 @@ describe("createRouter end-to-end", () => {
     }
   });
 
-  it("bumps cheap route to balanced when judge did not pass", async () => {
+  it("keeps unpassed judge route at least balanced even under preferCheap", async () => {
     const failJudgeCheap = [
       JSON.stringify({ userGoal: "", constraints: [], knownContext: "" }),
       JSON.stringify({
@@ -660,9 +675,9 @@ describe("createRouter end-to-end", () => {
         missingRequirementQuestion: "Which file?",
         executionRoute: {
           tier: "cheap",
-          complexity: "low",
+          complexity: "medium",
           risk: "read_only",
-          confidence: 0.8,
+          confidence: 0.95,
           reason: "Read-only task.",
         },
       }),
@@ -676,16 +691,22 @@ describe("createRouter end-to-end", () => {
         missingRequirementQuestion: "Which file?",
         executionRoute: {
           tier: "cheap",
-          complexity: "low",
+          complexity: "medium",
           risk: "read_only",
-          confidence: 0.8,
+          confidence: 0.95,
           reason: "Read-only task.",
         },
       }),
     ];
     const h = harness({
       llmResponses: failJudgeCheap,
-      settingsOverride: ADAPTIVE_ROUTING_SETTINGS,
+      settingsOverride: {
+        ...ADAPTIVE_ROUTING_SETTINGS,
+        executionRouting: {
+          ...ADAPTIVE_ROUTING_SETTINGS.executionRouting,
+          preference: "preferCheap",
+        },
+      },
     });
     try {
       writeSkill(h.workspace, "demo", "Do it.");
@@ -702,8 +723,14 @@ describe("createRouter end-to-end", () => {
       assert.equal(
         h.subAgentCalls[0]!.model,
         "openrouter/test/balanced",
-        "cheap route should be bumped to balanced when judge did not pass"
+        "cheap route should stay at least balanced when judge did not pass"
       );
+      const entry = h.logs.find((l) => l.msg.includes("auggie-router.execution-route"));
+      assert.ok(entry, "expected structured route log");
+      const data = JSON.parse(entry.msg);
+      assert.equal(data.routeTier, "cheap");
+      assert.equal(data.effectiveTier, "balanced");
+      assert.equal(data.tier, "balanced");
     } finally {
       h.cleanup();
     }

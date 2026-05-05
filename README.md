@@ -76,7 +76,18 @@ All knobs live under `auggieRouter` in `.pi/settings.json`:
     "subAgentTemperature": 0.0,
     "overflowCeilingBytes": 25000,
     "auggieBinPath": "auggie",
-    "allowedProviderPrefixes": []
+    "allowedProviderPrefixes": [],
+    "executionRouting": {
+      "enabled": false,
+      "preference": "balanced",
+      "surfaceDecision": false,
+      "skillModelPolicy": "pin",
+      "models": {
+        "cheap": "anthropic/claude-3-5-haiku",
+        "balanced": "anthropic/claude-3-5-sonnet",
+        "frontier": "anthropic/claude-3-7-sonnet"
+      }
+    }
   }
 }
 ```
@@ -88,6 +99,137 @@ All knobs live under `auggieRouter` in `.pi/settings.json`:
 
 Defaults match the values shown above. Only `defaultProvider` is expected to
 change in normal use; everything else is opinionated for a reason.
+
+## Adaptive Execution Model Routing
+
+By default, the router resolves the execution model from the `SKILL.md`
+`model:` frontmatter field (or a built-in fallback). This means easy tasks
+and hard tasks run on the same static model.
+
+Adaptive execution routing adds a lightweight model-selection step: after the
+Actor/Judge loop classifies the task by complexity and risk, the router picks
+an appropriate model from a configurable **cheap / balanced / frontier** pool.
+The selection is **sticky** for the entire `/skill` run — one model is chosen
+before the sub-agent starts and never changes mid-execution.
+
+**Disabled by default.** Existing behavior is preserved unless you explicitly
+opt in.
+
+### Enabling adaptive routing
+
+```json
+{
+  "auggieRouter": {
+    "executionRouting": {
+      "enabled": true,
+      "preference": "balanced",
+      "surfaceDecision": true,
+      "skillModelPolicy": "pin",
+      "models": {
+        "cheap": "anthropic/claude-3-5-haiku",
+        "balanced": "anthropic/claude-3-5-sonnet",
+        "frontier": "anthropic/claude-3-7-sonnet"
+      }
+    }
+  }
+}
+```
+
+### How it works
+
+1. The Judge (already running in the Actor/Judge loop) classifies the task
+   with an `executionRoute` that includes `tier`, `complexity`, `risk`,
+   `confidence`, and a `reason`.
+2. The router applies a **preference adjustment** (see below) and **safety
+   floors** — e.g. `architecture_change` tasks always use `frontier`.
+3. Exactly one model is selected from the configured pool and passed to the
+   sub-agent. No mid-run re-routing occurs.
+4. Route metadata is **never injected into the sub-agent system prompt**,
+   preserving prompt-cache efficiency.
+
+### Settings
+
+| Setting | Values | Default | Purpose |
+| --- | --- | --- | --- |
+| `enabled` | `true` / `false` | `false` | Turn adaptive routing on. |
+| `preference` | `preferCheap` / `balanced` / `preferBest` | `balanced` | Cost-vs-quality bias. |
+| `surfaceDecision` | `true` / `false` | `false` | Show the selected tier/model in the `[System]` execution message. |
+| `skillModelPolicy` | `pin` / `ignore` | `pin` | How `SKILL.md` `model:` interacts with routing. |
+| `models.cheap` | model ID | `anthropic/claude-3-5-haiku` | Model for read-only / low-complexity tasks. |
+| `models.balanced` | model ID | `anthropic/claude-3-5-sonnet` | Model for scoped edits and medium-complexity tasks. |
+| `models.frontier` | model ID | `anthropic/claude-3-7-sonnet` | Model for multi-file / architecture / high-risk tasks. |
+
+All configured model IDs pass through `mapModel(...)` so `defaultProvider`
+and `allowedProviderPrefixes` continue to apply.
+
+### Preference adjustment
+
+| Preference | Behavior |
+| --- | --- |
+| `balanced` | Use the base tier chosen by the Judge. |
+| `preferCheap` | Downgrade `balanced` → `cheap` when complexity is `medium`, risk is `read_only` or `small_edit`, and confidence ≥ 0.7. Never downgrades high-risk tasks. |
+| `preferBest` | Upgrade cheap edit tasks to `balanced`. Upgrade unknown-risk tasks to `frontier`. |
+
+### Safety floors (always enforced)
+
+Regardless of preference:
+
+- `architecture_change` always routes to `frontier`.
+- `multi_file_edit` never routes below `balanced`.
+- `unknown` risk with confidence < 0.5 never routes below `balanced`.
+- If the Judge did not pass (Q&A was needed), the minimum tier is `balanced`.
+
+### Skill model policy
+
+| Policy | Behavior |
+| --- | --- |
+| `pin` | If `SKILL.md` has `model:`, use it exactly as before. Only tasks without a pinned model go through adaptive routing. **Safest default.** |
+| `ignore` | Ignore `SKILL.md` `model:` and always route from the pool. Useful for team-level cost control. |
+
+### Missing pool entries
+
+If the selected tier has no model configured, the router walks a fallback chain:
+
+- Missing `cheap` → `balanced` → `frontier`
+- Missing `balanced` → `frontier` → `cheap`
+- Missing `frontier` → `balanced` → `cheap`
+
+If nothing in the pool resolves, the router falls back to the legacy
+`mapModel(skill.rawModel, ...)` behavior so the skill still runs.
+
+### Observability
+
+When `surfaceDecision=true`, the execution message includes the selected tier
+and resolved model:
+
+```
+[System]: ⚙️ Executing /skill:refactor using balanced model openrouter/anthropic/claude-3-5-sonnet. Reason: route balanced (complexity=medium, risk=small_edit, confidence=0.82)
+```
+
+When `surfaceDecision=false` (default), the existing minimal message is shown:
+
+```
+[System]: ⚙️ Executing /skill:refactor (Auggie semantic retrieval running...)
+```
+
+Every skill execution emits a structured log via `host.log`:
+
+```json
+{
+  "event": "auggie-router.execution-route",
+  "skill": "refactor",
+  "tier": "balanced",
+  "model": "openrouter/anthropic/claude-3-5-sonnet",
+  "source": "execution-routing",
+  "complexity": "medium",
+  "risk": "small_edit",
+  "confidence": 0.82,
+  "routeTier": "balanced",
+  "effectiveTier": "balanced"
+}
+```
+
+No user prompt content, chat history, or secrets are logged.
 
 ### Security-relevant settings
 
@@ -133,15 +275,22 @@ to an untrusted provider.
 5. **Auggie pre-flight** — `auggie status` is spawned silently. Any non-zero
    exit aborts with `[System Error]: Cannot execute skill. Augment daemon is
    offline or unauthenticated.`
-6. **Sub-agent execution** — the input editor is locked, a `[System]: ⚙️ Executing …`
+6. **Execution model selection** — the router computes the sub-agent model.
+   When adaptive routing is disabled (default), this is the legacy
+   `mapModel(skill.rawModel, ...)` path. When enabled, the Judge's
+   `executionRoute` is combined with preference, safety floors, and the
+   configured pool to select exactly one model. The selection is sticky for
+   the entire run and never injected into the sub-agent prompt.
+7. **Sub-agent execution** — the input editor is locked, a `[System]: ⚙️ Executing …`
    marker is posted, and an isolated Pi sub-agent runs at `temperature: 0.0`
    with the `auggie` MCP attached over stdio. The sub-agent's prompt is
    appended with: *"To gather context, you MUST strictly use the MCP tool
    named `codebase-retrieval`. Do not attempt to run auggie in the terminal."*
-7. **Overflow middleware** — every `auggie/codebase-retrieval` response over
+   A structured route log is emitted at this point.
+8. **Overflow middleware** — every `auggie/codebase-retrieval` response over
    25 KB (configurable) is dropped and replaced with `"Result too large.
    Please refine your codebase-retrieval query to be more specific."`
-8. **Resolution** — final sub-agent text is posted to the main thread, the
+9. **Resolution** — final sub-agent text is posted to the main thread, the
    editor is unlocked, the state machine resets to `idle`.
 
 ## State machine

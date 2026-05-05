@@ -4,7 +4,7 @@
 **Package:** `pi-auggie-router`  
 **Status owner:** TBD  
 **Last updated:** 2026-05-05  
-**Overall status:** Phases 1–5 complete — adaptive routing wired + observable; Phase 6 deferred; Phase 7 (docs) next
+**Overall status:** Phases 1–5 + 7 complete; Phase 6 deferred; Phase 8 (release readiness) partially done
 
 ## 1. Status legend
 
@@ -27,8 +27,8 @@
 | 4 | Cache-safe router wiring | `[x]` | `chooseExecutionModel` wired into `src/index.ts`; one model per run; no prompt mutation. |
 | 5 | Observability | `[x]` | Structured route logs via `host.log`; optional `surfaceDecision` system message. |
 | 6 | Optional cache-aware route memory | `[d]` | Deferred until logs prove same-skill model churn matters. |
-| 7 | README/docs update | `[ ]` | Document new settings and behavior after implementation. |
-| 8 | Release readiness | `[ ]` | Full test/lint/build pass and changelog/release notes. |
+| 7 | README/docs update | `[x]` | README updated with adaptive routing section, config, policies, safety floors, observability. |
+| 8 | Release readiness | `[~]` | Test/lint/build pass; exports confirmed. dist/release notes remaining. |
 
 ## 3. Phase checklist
 
@@ -273,29 +273,28 @@ Goal: document the feature after behavior and config are implemented.
 
 Tasks:
 
-- `[ ]` Update README configuration example with `executionRouting`.
-- `[ ]` Document defaults.
-- `[ ]` Document `skillModelPolicy`.
-- `[ ]` Document cache-efficiency invariant: one selected model per `/skill` run.
-- `[ ]` Document `surfaceDecision` behavior.
-- `[ ]` Document provider allowlist enforcement for pool models.
-- `[ ]` Add migration note: disabled by default, existing behavior preserved.
+- `[x]` Update README configuration example with `executionRouting`.
+- `[x]` Document defaults.
+- `[x]` Document `skillModelPolicy`.
+- `[x]` Document cache-efficiency invariant: one selected model per `/skill` run.
+- `[x]` Document `surfaceDecision` behavior.
+- `[x]` Document provider allowlist enforcement for pool models.
+- `[x]` Add migration note: disabled by default, existing behavior preserved.
 
-Files likely touched:
+Files touched:
 
 - `README.md`
-- `docs/PRD-adaptive-execution-model-routing.md`, if implementation diverges from PRD
 - `docs/PRD-Implementation-Status.md`
 
 ### Phase 8 — Release readiness
 
 Tasks:
 
-- `[ ]` Run `npm test`.
-- `[ ]` Run `npm run lint`.
-- `[ ]` Run `npm run build`.
+- `[x]` Run `npm test`.
+- `[x]` Run `npm run lint`.
+- `[x]` Run `npm run build`.
 - `[ ]` Confirm generated `dist/` output is updated if this package tracks build artifacts.
-- `[ ]` Confirm package exports include any new public helpers/types intended for consumers.
+- `[x]` Confirm package exports include any new public helpers/types intended for consumers.
 - `[ ]` Prepare release notes.
 - `[ ]` Decide semver bump.
 
@@ -436,6 +435,7 @@ Relevant current files:
 | 2026-05-05 | Phase 4 landed: cache-safe router wiring | AI assistant | `src/index.ts` uses `chooseExecutionModel` once per run; safety floor for unpassed judge; 117/117 tests pass. |
 | 2026-05-05 | Phase 5 landed: observability | AI assistant | Structured route logs via `host.log`; optional `surfaceDecision` system message; prompt cache preserved. |
 | 2026-05-05 | Addressed Phase 4/5 review fixes | AI assistant | Added `minimumTier`, extracted route/message/log helpers, used effective route consistently, sanitized/surfaced all decision sources. |
+| 2026-05-05 | Phase 7 landed: README/docs update | AI assistant | Added adaptive routing section, config table, preference/safety/policy docs, execution flow update, migration note. |
 
 ## 11. Definition of done
 

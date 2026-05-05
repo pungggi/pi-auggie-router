@@ -1,81 +1,72 @@
 # Getting Started
 
-This guide walks you through setting up `pi-auggie-router` and creating your first skill workflow.
+This guide walks you through your first `/skill:` workflow inside the **pi.dev terminal** (`@mariozechner/pi-coding-agent`).
+
+`pi-auggie-router` ships as a pi.dev extension. Install once with `pi install npm:pi-auggie-router` — pi auto-loads it on every launch from there on.
+
+(If you also want DDD workflow enforcement, install [`pi-ddd-router`](../pi-ddd-router/README.md) instead. It composes this router + `pi-ddd` in one extension.)
 
 ## Prerequisites
 
-1. **Node.js ≥ 20.6**
-2. **Augment Code CLI** (`auggie`) installed and running:
+1. **pi.dev** (`@mariozechner/pi-coding-agent`) installed and on `PATH` (`pi --help` works).
+2. **Augment Code CLI** (`auggie`) installed and authenticated. From any shell:
    ```bash
-   auggie status  # Should exit 0 and show "connected"
+   auggie status
    ```
-   [Install Augment Code](https://www.augmentcode.com/)
+   Must exit `0` and report `connected`. If not, install from [augmentcode.com](https://www.augmentcode.com/) and run `auggie login`.
+3. **An OpenRouter key** (or whichever provider you point `defaultProvider` at) configured in pi.dev — this is what the routing-class model and sub-agent calls go through.
 
-3. **A Pi host** — an application that integrates the Pi framework. If you're building a Pi extension or using a Pi-compatible host, you can mount this router.
-
-## Installation
+## Step 0: Install the extension
 
 ```bash
-npm install pi-auggie-router
+pi install npm:pi-auggie-router
 ```
 
-## Step 1: Mount the Router in Your Pi Host
+That's it. `pi install` reads the package's `pi.extensions` field and registers `extension.ts` in your pi settings — auto-loaded on every `pi` launch.
 
-In your Pi host application code:
+Scope:
+- Default = global (`~/.pi/settings.json`).
+- Add `-l` for project-local (`.pi/settings.json` in the workspace).
 
-```ts
-import { createRouter } from "pi-auggie-router";
-
-// Your host must satisfy the PiHost interface:
-// - postSystemMessage, postAssistantMessage, setInputLocked
-// - getRecentMessages, callLLM, runSubAgent
-// - onUserInput, onBeforeMessage
-// - resolveWorkspacePath, resolveHomePath
-// - log (optional)
-
-const router = createRouter(piHost, {
-  // Optional: pre-flight hook override (for tests)
-  preflight: async () => {
-    // Custom auggie health check
-    return { ok: true, detail: "" };
-  },
-
-  // Optional: append domain-specific rules to every sub-agent
-  systemPromptAppendix: `
-    When working with this codebase, follow DDD patterns:
-    - Keep business logic in domain services
-    - Use repositories for data access
-    - Emit domain events for state changes
-  `,
-
-  // Optional: attach additional MCP servers
-  additionalMcpServers: [
-    {
-      name: "my-mcp",
-      command: "node",
-      args: ["./my-mcp-server.js"],
-    },
-  ],
-
-  // Optional: custom tool result middleware
-  additionalToolMiddleware: [
-    (ctx, result) => {
-      if (ctx.serverName === "my-mcp" && ctx.toolName === "expensive") {
-        // Block or rewrite tool results
-        return { block: true, replacement: "Tool output too large; refine query." };
-      }
-      return { block: false };
-    },
-  ],
-});
-
-// When shutting down:
-router.dispose();
+```bash
+pi install npm:pi-auggie-router -l   # only this project
 ```
 
-## Step 2: Configure Settings (Optional)
+Verify:
 
-Create `.pi/settings.json` in your workspace:
+```bash
+pi list
+```
+
+Should show `pi-auggie-router`. Remove with `pi remove npm:pi-auggie-router`.
+
+Other sources also accepted (`git:`, `https:`, local path) — see `pi install --help`.
+
+## Step 1: Verify the router is live
+
+In the pi.dev terminal, type:
+
+```
+/skill:does-not-exist
+```
+
+You should see:
+
+```
+[System]: Skill "does-not-exist" not found.
+```
+
+That confirms the `/skill:` interceptor is mounted. If instead the main agent replies in prose ("I don't recognize that skill…"), the extension did not load — re-check Step 0. The bridge sometimes can't intercept the `/skill:` prefix; in that case use the registered slash command form:
+
+```
+/skill does-not-exist
+```
+
+Same null-result behavior, but routed through `pi.registerCommand` instead of `onUserInput`.
+
+## Step 2: Configure (optional)
+
+Defaults work for most cases. To override, create `.pi/settings.json` at the root of your workspace:
 
 ```json
 {
@@ -96,15 +87,22 @@ Create `.pi/settings.json` in your workspace:
 }
 ```
 
-Default values work for most cases. See [README.md](README.md#configuration) for all options.
+`surfaceDecision: true` makes the router announce which tier it picked and why. Useful while you are tuning skills. See [README.md](README.md#configuration) for every knob.
 
-## Step 3: Create Your First Skill
+User-level defaults can also live at `~/.pi/settings.json`; workspace overrides win.
 
-Skills live in `.pi/skills/<name>/SKILL.md` (workspace) or `~/.pi/agent/skills/<name>/SKILL.md` (user). Workspace skills take precedence.
+## Step 3: Write your first skill
 
-### Example: Simple Refactor
+Skills live at:
 
-Create `.pi/skills/refactor/SKILL.md`:
+- `.pi/skills/<name>/SKILL.md` — workspace-scoped (committed with the repo)
+- `~/.pi/agent/skills/<name>/SKILL.md` — user-scoped (available everywhere)
+
+Workspace skills win on name collision.
+
+### Example A — pinned model
+
+`.pi/skills/refactor/SKILL.md`:
 
 ```markdown
 ---
@@ -113,131 +111,123 @@ model: claude-3-5-sonnet
 
 You are a code refactoring assistant.
 
-Your goal is to improve code quality while preserving exact behavior:
-- Simplify complex functions by extracting helper functions
-- Rename variables and functions to be self-documenting
+Improve code quality while preserving exact behavior:
+- Extract helpers from long functions
+- Rename for self-documentation
 - Remove dead code and unused imports
-- Apply consistent formatting (Prettier style)
-- Add JSDoc comments for public functions
+- Apply Prettier-style formatting
+- Add JSDoc on public functions
 
 Constraints:
-- Do not change the public API of exported functions
+- Do not change exported public APIs
 - Do not modify test files
 - Do not change business logic
-- Always run the linter after refactoring
+- Run the linter after refactoring
 ```
 
-### Example: Add Unit Tests
+### Example B — adaptive routing
 
-Create `.pi/skills/test/SKILL.md`:
+`.pi/skills/explain/SKILL.md`:
+
+```markdown
+---
+# No model: → adaptive routing chooses based on complexity/risk
+---
+
+You are a code-explanation assistant. For each function or class:
+- One-sentence purpose
+- Inputs and outputs
+- Side effects
+- Non-obvious patterns or anti-patterns
+
+Keep it 2–3 sentences per function. Focus on the "why".
+```
+
+With `executionRouting.enabled = true` and `preference = "balanced"`, a read-only explain task will usually drop to the cheap tier.
+
+### Example C — tests
+
+`.pi/skills/test/SKILL.md`:
 
 ```markdown
 ---
 ---
 
-You are a test-driven development assistant.
-
-Your goal is to add comprehensive unit tests for the code provided in context.
+You are a TDD assistant. Add unit tests for the code in context.
 
 Requirements:
-- Use Jest (or the project's test framework)
-- Test all public functions and methods
-- Include edge cases and error conditions
-- Mock external dependencies
-- Keep tests readable and well-organized
+- Use the project's test framework (detect from package.json / config)
+- Cover public functions, edge cases, error paths
+- Mock external deps
+- Descriptive test names
 
 Constraints:
-- Do not modify the source code under test
-- Add tests in the same directory as the source
-- Use descriptive test names that describe the behavior
+- Do not modify code under test
+- Place tests next to the source
 ```
 
-### Example: With Adaptive Routing
+## Step 4: Run the skill
 
-Create `.pi/skills/explain/SKILL.md`:
-
-```markdown
----
-# No model specified → adaptive routing will choose based on task complexity
----
-
-You are a code explanation assistant.
-
-Your goal is to explain code clearly to a developer who may not be familiar with the codebase.
-
-For each function or class:
-- Explain its purpose in one sentence
-- Describe its inputs and outputs
-- Note any important side effects
-- Call out non-obvious patterns or anti-patterns
-
-Keep explanations concise (2-3 sentences per function). Focus on the "why", not just the "what".
-```
-
-With adaptive routing enabled and `preference: "balanced"`, this read-only task may route to a cheaper model.
-
-## Step 4: Run Your Skill
-
-In your Pi host interface, type:
+In the pi.dev terminal:
 
 ```
 /skill:refactor Clean up src/utils/auth.ts
 ```
 
-The router will:
+What happens, in order:
 
-1. Intercept the command and load `.pi/skills/refactor/SKILL.md`
-2. Run the Actor/Judge loop to classify the task and gather context
-3. Select the execution model (from `model:` frontmatter or adaptive routing)
-4. Spin up a sub-agent with the Augment Code MCP attached
-5. The sub-agent uses `codebase-retrieval` to fetch relevant code
-6. Apply the skill's instructions and produce the result
-7. Display the result in the main thread
+1. Router intercepts `/skill:refactor`, loads `.pi/skills/refactor/SKILL.md`.
+2. Pre-flight check: `auggie status` must be green.
+3. **Actor/Judge loop** runs against the routing model — turns your one-liner into a structured brief and decides if more context is needed.
+4. **Execution model** is picked: `model:` frontmatter, or adaptive routing if enabled.
+5. A sub-agent spins up with the Augment MCP attached and is forced to call `codebase-retrieval` for context — no raw file dumps.
+6. The sub-agent applies the skill instructions and returns a synthesized result.
+7. Result lands in the main thread. Your editor unlocks.
 
-## Step 5: Example Session
+While the skill runs, the input box is locked. The system messages tell you what stage you are in.
 
-**User:**
+## Step 5: Example session
+
+You type:
+
 ```
 /skill:test Add tests for src/services/user.ts
 ```
 
-**System:**
+Terminal shows:
+
 ```
 [System]: ⚙️ Executing /skill:test (Auggie semantic retrieval running...)
 ```
 
-**Assistant:**
+Then the assistant message lands:
+
 ```
 I'll add comprehensive unit tests for `src/services/user.ts`.
 
-Let me first retrieve the relevant code...
 [sub-agent uses codebase-retrieval MCP tool]
 
-Here are the tests I've added:
+Tests added:
 
-```typescript
 // src/services/user.test.ts
 import { UserService } from './user';
 import { mockUserRepository } from '../mocks';
 
 describe('UserService', () => {
   describe('findById', () => {
-    it('returns the user when found', async () => {
-      // ...
-    });
-
-    it('returns null when user not found', async () => {
-      // ...
-    });
-
-    it('handles repository errors gracefully', async () => {
-      // ...
-    });
+    it('returns the user when found', async () => { /* ... */ });
+    it('returns null when user not found', async () => { /* ... */ });
+    it('handles repository errors gracefully', async () => { /* ... */ });
   });
 });
-```
 
 All tests cover the public API, edge cases, and error conditions.
+```
+
+If adaptive routing is on with `surfaceDecision: true`, you also see one line like:
+
+```
+[System]: ⚙️ Executing /skill:test using balanced model openrouter/anthropic/claude-3-5-sonnet. Reason: route balanced (complexity=medium, risk=write_tests, confidence=0.88)
 ```
 
 ## Troubleshooting
@@ -248,10 +238,14 @@ All tests cover the public API, edge cases, and error conditions.
 [System Error]: Cannot execute skill. Augment daemon is offline or unauthenticated.
 ```
 
-**Fix:** Run `auggie status` to diagnose. Start the Augment daemon:
+In a separate shell:
+
 ```bash
-auggie start
+auggie status
+auggie login    # if unauthenticated
 ```
+
+Re-run the skill once `auggie status` exits 0.
 
 ### Skill not found
 
@@ -259,20 +253,21 @@ auggie start
 [System]: Skill "myskill" not found.
 ```
 
-**Fix:** Check that the skill file exists at `.pi/skills/myskill/SKILL.md`.
+Check the path. Workspace path must be exactly `.pi/skills/myskill/SKILL.md` (case matters on Linux/macOS). User path must be `~/.pi/agent/skills/myskill/SKILL.md`.
 
-### Q&A triggered
+### Q&A clarification prompt
 
 ```
 [System]: Missing context for skill. Which files should I focus on?
 ```
 
-**Fix:** The Judge couldn't determine the scope. Provide a clarification:
+The Judge couldn't pin down the scope. Type the answer as a normal message — do not re-issue `/skill:`:
+
 ```
-/src/utils/auth.ts and src/middleware/auth.ts
+src/utils/auth.ts and src/middleware/auth.ts
 ```
 
-Your answer is appended to the brief as a clarification and execution proceeds directly (no Actor/Judge re-run).
+Your reply is appended to the brief as a clarification and execution proceeds directly (no Actor/Judge re-run).
 
 ### Sub-agent timeout
 
@@ -280,33 +275,33 @@ Your answer is appended to the brief as a clarification and execution proceeds d
 [System]: Sub-agent stopped early (timeout).
 ```
 
-**Fix:** Increase `totalTimeoutMs` in settings, or provide more specific input to reduce work.
+Either bump `totalTimeoutMs` in `.pi/settings.json`, or narrow the input ("refactor `parseToken`" instead of "refactor the auth module").
 
-### Model not allowed
+### Disallowed model provider
 
 ```
 [System]: Sub-agent failed: Model "evil/vendor/model" uses a disallowed provider. Allowed prefixes: openrouter
 ```
 
-**Fix:** Configure `allowedProviderPrefixes` in settings:
+Either change the skill's `model:` to an allowed provider, or extend the allowlist:
+
 ```json
 {
   "auggieRouter": {
-    "allowedProviderPrefixes": ["openrouter"]
+    "allowedProviderPrefixes": ["openrouter", "myco"]
   }
 }
 ```
 
-## Next Steps
+## Next steps
 
-- **Enable adaptive routing** — see [README.md](README.md#adaptive-execution-model-routing)
-- **Add custom middleware** — intercept or rewrite tool results
-- **Extend with MCP servers** — bring your own tools and data sources
-- **Review security considerations** — see [README.md](README.md#security-model)
+- **Adaptive routing tuning** — see [README.md](README.md#adaptive-execution-model-routing) for `preference`, `skillModelPolicy`, and safety floors.
+- **Custom MCP servers / tool middleware** — host-level extension; not configurable from `.pi/settings.json` alone. Talk to whoever maintains the pi.dev build you are using.
+- **Security model** — see [README.md](README.md#security-model) before pointing `routingModel` at anything outside your trust boundary; the routing model sees the last `historyWindow` chat messages.
 
-## Example: Full Workflow with Adaptive Routing
+## Full adaptive workflow, end to end
 
-1. Enable routing in `.pi/settings.json`:
+1. Enable in `.pi/settings.json`:
    ```json
    {
      "auggieRouter": {
@@ -319,21 +314,20 @@ Your answer is appended to the brief as a clarification and execution proceeds d
    }
    ```
 
-2. Create a simple documentation skill without `model:`:
+2. Drop a no-model skill at `.pi/skills/docs/SKILL.md`:
    ```markdown
-   # .pi/skills/docs/SKILL.md
-   Generate API documentation for the code provided.
-   Use Markdown with JSDoc-style parameter documentation.
+   Generate API documentation for the code in context.
+   Use Markdown with JSDoc-style parameter docs.
    ```
 
-3. Run it:
+3. Run it in the pi.dev terminal:
    ```
    /skill:docs Document src/api/routes.ts
    ```
 
-4. Observe the routing decision:
+4. Observe:
    ```
    [System]: ⚙️ Executing /skill:docs using cheap model openrouter/anthropic/claude-3-5-haiku. Reason: route cheap (complexity=low, risk=read_only, confidence=0.95)
    ```
 
-The router classified this as a read-only, low-complexity task and selected the cheap model, saving cost while maintaining quality.
+Read-only, low-complexity → cheap tier. Same skill on a riskier target (e.g. a generator that mutates code) would route up.

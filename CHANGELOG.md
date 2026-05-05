@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] — 2026-05-06
+
+### Added
+
+- **Native pi.dev extension entry** — package now ships `extension.ts` at root and declares `pi.extensions` in `package.json`. Install with a single command:
+  ```bash
+  pi install npm:pi-auggie-router
+  ```
+  No more manual `npm install` + `-e` flag or `.pi/extensions/` symlink. `pi install` reads the manifest and auto-registers the extension in pi settings (global by default, project-local with `-l`).
+
+- **`/skill <name>` slash-command fallback** — registered alongside the `onUserInput` `/skill:` interceptor, so the router still works in pi.dev contexts where the bridge cannot hook the prefix directly. Skill names validated against `[a-zA-Z0-9_-]+`.
+
+- **Optional peer dependency** on `@mariozechner/pi-coding-agent` (`>=0.70.6`). Marked optional so library consumers embedding `createRouter` in their own host are not forced to install it.
+
+### Changed
+
+- **GETTING-STARTED.md** rewritten for end-users running pi.dev terminal. Drops host-mounting code; flow is now: `pi install` → write `SKILL.md` → run `/skill:<name>`.
+
 ## [1.1.0] — 2026-05-05
 
 ### Added

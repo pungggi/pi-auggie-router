@@ -1,6 +1,6 @@
 {
   "name": "pi-auggie-router",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Opinionated sub-agent router for Pi: tightly couples SKILL.md execution with the Augment Code (auggie) Context Engine.",
   "author": "pi-auggie-router contributors",
   "license": "MIT",
@@ -15,11 +15,15 @@
   },
   "files": [
     "dist",
+    "extension.ts",
     "README.md",
     "GETTING-STARTED.md",
     "CHANGELOG.md",
     "LICENSE"
   ],
+  "pi": {
+    "extensions": ["./extension.ts"]
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/pungggi/pi-auggie-router.git"
@@ -38,6 +42,8 @@
   "keywords": [
     "pi",
     "pi-framework",
+    "pi-extension",
+    "pi-package",
     "auggie",
     "augment",
     "claude",
@@ -52,7 +58,16 @@
   "dependencies": {
     "gray-matter": "4.0.3"
   },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": ">=0.70.6"
+  },
+  "peerDependenciesMeta": {
+    "@mariozechner/pi-coding-agent": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@mariozechner/pi-coding-agent": "^0.70.6",
     "@types/node": "20.11.0",
     "rimraf": "5.0.5",
     "tsx": "4.21.0",

@@ -1,6 +1,6 @@
 {
   "name": "pi-auggie-router",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Opinionated sub-agent router for Pi: tightly couples SKILL.md execution with the Augment Code (auggie) Context Engine.",
   "author": "pi-auggie-router contributors",
   "license": "MIT",
@@ -16,6 +16,7 @@
   "files": [
     "dist",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "repository": {

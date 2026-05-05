@@ -45,6 +45,7 @@ function harness(opts: HarnessOpts) {
   const lockEvents: { locked: boolean; reason?: string }[] = [];
   const llmCalls: LLMCallOptions[] = [];
   const subAgentCalls: SubAgentRunOptions[] = [];
+  const logs: { level: string; msg: string }[] = [];
 
   let inputCb: ((raw: string) => { cancel: boolean } | void) | null = null;
   let beforeCb: ((msg: string) => { cancel: boolean }) | null = null;
@@ -92,6 +93,7 @@ function harness(opts: HarnessOpts) {
     },
     resolveWorkspacePath: (rel) => join(workspace, rel),
     resolveHomePath: (rel) => join(home, rel),
+    log: (level, msg) => logs.push({ level, msg }),
   };
 
   return {
@@ -102,6 +104,7 @@ function harness(opts: HarnessOpts) {
     lockEvents,
     llmCalls,
     subAgentCalls,
+    logs,
     fireInput: (raw: string) => inputCb?.(raw),
     fireBefore: (msg: string) => beforeCb?.(msg),
     cleanup: () => {
@@ -130,6 +133,41 @@ const PASSING_LLM_PAIR = [
     isUnambiguous: true,
   }),
 ];
+
+function passingPairWithRoute(route: Record<string, unknown>): string[] {
+  return [
+    JSON.stringify({ userGoal: "g", constraints: [], knownContext: "" }),
+    JSON.stringify({
+      hasUserGoal: true,
+      hasRequiredInputs: true,
+      hasScopeBoundary: true,
+      isUnambiguous: true,
+      executionRoute: route,
+    }),
+  ];
+}
+
+const CHEAP_READ_ONLY_ROUTE: Record<string, unknown> = {
+  tier: "cheap",
+  complexity: "low",
+  risk: "read_only",
+  confidence: 0.9,
+  reason: "Read-only lookup task.",
+};
+
+const ADAPTIVE_ROUTING_SETTINGS = {
+  executionRouting: {
+    enabled: true,
+    preference: "balanced",
+    surfaceDecision: false,
+    skillModelPolicy: "pin",
+    models: {
+      cheap: "openrouter/test/cheap",
+      balanced: "openrouter/test/balanced",
+      frontier: "openrouter/test/frontier",
+    },
+  },
+};
 
 describe("createRouter end-to-end", () => {
   it("routes /skill: through Actor/Judge → sub-agent and posts result", async () => {
@@ -421,6 +459,283 @@ describe("createRouter end-to-end", () => {
       // The router should have walked the loop with abort signals attached.
       assert.ok(h.llmCalls.length >= 2);
       assert.ok(h.llmCalls.every((c) => c.signal !== undefined));
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  // --- Phase 4+5: adaptive execution routing integration tests ---
+
+  it("uses adaptive model selection when executionRouting enabled", async () => {
+    const h = harness({
+      llmResponses: passingPairWithRoute(CHEAP_READ_ONLY_ROUTE),
+      settingsOverride: ADAPTIVE_ROUTING_SETTINGS,
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      assert.equal(h.subAgentCalls.length, 1);
+      assert.equal(
+        h.subAgentCalls[0]!.model,
+        "openrouter/test/cheap",
+        "should use cheap pool model"
+      );
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("surfaces routing decision in system message when surfaceDecision is true", async () => {
+    const h = harness({
+      llmResponses: passingPairWithRoute(CHEAP_READ_ONLY_ROUTE),
+      settingsOverride: {
+        ...ADAPTIVE_ROUTING_SETTINGS,
+        executionRouting: {
+          ...ADAPTIVE_ROUTING_SETTINGS.executionRouting,
+          surfaceDecision: true,
+        },
+      },
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      const sys = h.messages.find((m) =>
+        m.text.includes("using cheap model")
+      );
+      assert.ok(sys, "expected surfaced routing decision");
+      assert.match(sys!.text, /openrouter\/test\/cheap/);
+      assert.match(sys!.text, /Read-only lookup task/);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("keeps minimal execution message when surfaceDecision is false", async () => {
+    const h = harness({
+      llmResponses: passingPairWithRoute(CHEAP_READ_ONLY_ROUTE),
+      settingsOverride: ADAPTIVE_ROUTING_SETTINGS,
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      const sys = h.messages.find((m) =>
+        m.text.includes("⚙️ Executing /skill:demo")
+      );
+      assert.ok(sys, "expected execution message");
+      assert.match(
+        sys!.text,
+        /Auggie semantic retrieval running/,
+        "should use minimal format"
+      );
+      assert.ok(
+        !sys!.text.includes("using cheap model"),
+        "should not surface routing details"
+      );
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("emits structured route log", async () => {
+    const h = harness({
+      llmResponses: passingPairWithRoute(CHEAP_READ_ONLY_ROUTE),
+      settingsOverride: ADAPTIVE_ROUTING_SETTINGS,
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      const entry = h.logs.find((l) => l.msg.includes("auggie-router.execution-route"));
+      assert.ok(entry, "expected structured route log");
+      assert.equal(entry.level, "info");
+      const data = JSON.parse(entry.msg);
+      assert.equal(data.event, "auggie-router.execution-route");
+      assert.equal(data.skill, "demo");
+      assert.equal(data.tier, "cheap");
+      assert.equal(data.model, "openrouter/test/cheap");
+      assert.equal(data.source, "execution-routing");
+      assert.equal(data.complexity, "low");
+      assert.equal(data.risk, "read_only");
+      assert.equal(data.confidence, 0.9);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("does not inject route metadata into sub-agent system prompt", async () => {
+    const h = harness({
+      llmResponses: passingPairWithRoute(CHEAP_READ_ONLY_ROUTE),
+      settingsOverride: ADAPTIVE_ROUTING_SETTINGS,
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      assert.equal(h.subAgentCalls.length, 1);
+      const sp = h.subAgentCalls[0]!.systemPrompt;
+      // Route metadata must not leak into the sub-agent prompt.
+      assert.ok(!sp.includes("execution-route"), "no event name");
+      assert.ok(!sp.includes("openrouter/test/cheap"), "no model id");
+      assert.ok(!sp.includes("tier"), "no tier keyword");
+      assert.ok(!sp.includes("read_only"), "no risk value");
+      // Prompt should still contain the expected deterministic parts.
+      assert.match(sp, /codebase-retrieval/);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("honours pinned skill model when skillModelPolicy is pin", async () => {
+    const h = harness({
+      llmResponses: passingPairWithRoute(CHEAP_READ_ONLY_ROUTE),
+      settingsOverride: ADAPTIVE_ROUTING_SETTINGS, // skillModelPolicy: "pin" (default)
+    });
+    try {
+      writeSkill(
+        h.workspace,
+        "demo",
+        "---\nmodel: claude-3-7-sonnet\n---\nDo it."
+      );
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      assert.equal(h.subAgentCalls.length, 1);
+      assert.equal(
+        h.subAgentCalls[0]!.model,
+        "openrouter/anthropic/claude-3-7-sonnet",
+        "should use pinned skill model, not pool"
+      );
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("ignores skill model when skillModelPolicy is ignore", async () => {
+    const h = harness({
+      llmResponses: passingPairWithRoute(CHEAP_READ_ONLY_ROUTE),
+      settingsOverride: {
+        ...ADAPTIVE_ROUTING_SETTINGS,
+        executionRouting: {
+          ...ADAPTIVE_ROUTING_SETTINGS.executionRouting,
+          skillModelPolicy: "ignore",
+        },
+      },
+    });
+    try {
+      writeSkill(
+        h.workspace,
+        "demo",
+        "---\nmodel: claude-3-7-sonnet\n---\nDo it."
+      );
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      assert.equal(h.subAgentCalls.length, 1);
+      assert.equal(
+        h.subAgentCalls[0]!.model,
+        "openrouter/test/cheap",
+        "should use pool model, ignoring skill model"
+      );
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("bumps cheap route to balanced when judge did not pass", async () => {
+    const failJudgeCheap = [
+      JSON.stringify({ userGoal: "", constraints: [], knownContext: "" }),
+      JSON.stringify({
+        hasUserGoal: false,
+        hasRequiredInputs: false,
+        hasScopeBoundary: false,
+        isUnambiguous: false,
+        missingRequirementQuestion: "Which file?",
+        executionRoute: {
+          tier: "cheap",
+          complexity: "low",
+          risk: "read_only",
+          confidence: 0.8,
+          reason: "Read-only task.",
+        },
+      }),
+      // Second iteration after Q&A also fails → judge fallback rubric.
+      JSON.stringify({ userGoal: "g", constraints: [], knownContext: "" }),
+      JSON.stringify({
+        hasUserGoal: false,
+        hasRequiredInputs: false,
+        hasScopeBoundary: false,
+        isUnambiguous: false,
+        missingRequirementQuestion: "Which file?",
+        executionRoute: {
+          tier: "cheap",
+          complexity: "low",
+          risk: "read_only",
+          confidence: 0.8,
+          reason: "Read-only task.",
+        },
+      }),
+    ];
+    const h = harness({
+      llmResponses: failJudgeCheap,
+      settingsOverride: ADAPTIVE_ROUTING_SETTINGS,
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      const triggered = router.trigger("/skill:demo");
+      await new Promise((r) => setImmediate(r));
+      h.fireBefore("src/utils.ts");
+      await triggered;
+
+      // Judge never passed → Q&A answered → execution proceeds.
+      // Even though maxJudgeIterations exhausted, execution still starts.
+      // The cheap route should be bumped to balanced.
+      assert.equal(h.subAgentCalls.length, 1);
+      assert.equal(
+        h.subAgentCalls[0]!.model,
+        "openrouter/test/balanced",
+        "cheap route should be bumped to balanced when judge did not pass"
+      );
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("preserves existing model resolution when executionRouting is disabled", async () => {
+    const h = harness({
+      llmResponses: passingPairWithRoute(CHEAP_READ_ONLY_ROUTE),
+      // No settingsOverride → defaults (executionRouting.enabled: false)
+    });
+    try {
+      writeSkill(
+        h.workspace,
+        "demo",
+        "---\nmodel: claude-3-7-sonnet\n---\nDo it."
+      );
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      assert.equal(h.subAgentCalls.length, 1);
+      assert.equal(
+        h.subAgentCalls[0]!.model,
+        "openrouter/anthropic/claude-3-7-sonnet",
+        "should use skill model exactly as before"
+      );
+
+      // Message should be the standard format.
+      const sys = h.messages.find((m) =>
+        m.text.includes("⚙️ Executing /skill:demo")
+      );
+      assert.ok(sys);
+      assert.match(sys!.text, /Auggie semantic retrieval running/);
     } finally {
       h.cleanup();
     }

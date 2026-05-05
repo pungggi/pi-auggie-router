@@ -252,7 +252,7 @@ describe("chooseExecutionModel — safety floors", () => {
 });
 
 describe("chooseExecutionModel — pool resolution", () => {
-  it("walks the missing-pool fallback chain", () => {
+  it("walks cheap → balanced → frontier when cheap is missing", () => {
     const out = chooseExecutionModel({
       skill: makeSkill(undefined),
       route: makeRoute({ tier: "cheap", risk: "read_only" }),
@@ -260,10 +260,50 @@ describe("chooseExecutionModel — pool resolution", () => {
         enabled: true,
         skillModelPolicy: "ignore",
         models: {
-          // No `cheap` configured. Chain: cheap → balanced → frontier.
           cheap: undefined,
           balanced: "anthropic/claude-3-5-sonnet",
           frontier: "anthropic/claude-3-7-sonnet",
+        },
+      }),
+    });
+    assert.equal(out.tier, "balanced");
+    assert.equal(out.model, "openrouter/anthropic/claude-3-5-sonnet");
+  });
+
+  it("walks balanced → frontier → cheap when balanced is missing", () => {
+    const out = chooseExecutionModel({
+      skill: makeSkill(undefined),
+      route: makeRoute({ tier: "balanced", risk: "small_edit" }),
+      settings: withRouting({
+        enabled: true,
+        skillModelPolicy: "ignore",
+        models: {
+          cheap: "anthropic/claude-3-5-haiku",
+          balanced: undefined,
+          frontier: "anthropic/claude-3-7-sonnet",
+        },
+      }),
+    });
+    assert.equal(out.tier, "frontier");
+    assert.equal(out.model, "openrouter/anthropic/claude-3-7-sonnet");
+  });
+
+  it("walks frontier → balanced → cheap when frontier is missing", () => {
+    const out = chooseExecutionModel({
+      skill: makeSkill(undefined),
+      route: makeRoute({
+        tier: "frontier",
+        complexity: "high",
+        risk: "unknown",
+        confidence: 0.8,
+      }),
+      settings: withRouting({
+        enabled: true,
+        skillModelPolicy: "ignore",
+        models: {
+          cheap: "anthropic/claude-3-5-haiku",
+          balanced: "anthropic/claude-3-5-sonnet",
+          frontier: undefined,
         },
       }),
     });
@@ -319,6 +359,7 @@ describe("chooseExecutionModel — pool resolution", () => {
     });
     assert.equal(out.source, "fallback");
     assert.equal(out.model, "openrouter/anthropic/claude-3-5-haiku");
+    assert.match(out.reason, /legacy SKILL\.md model resolution/);
   });
 
   it("propagates DisallowedProviderError when even the legacy fallback rawModel is rejected", () => {
@@ -348,7 +389,24 @@ describe("chooseExecutionModel — pool resolution", () => {
   });
 });
 
-describe("chooseExecutionModel — undefined route", () => {
+describe("chooseExecutionModel — defensive input handling", () => {
+  it("treats unsupported runtime skillModelPolicy values as ignore", () => {
+    const settings = withRouting({
+      enabled: true,
+      skillModelPolicy: "pin",
+    });
+    (settings.executionRouting as { skillModelPolicy: string }).skillModelPolicy = "prefer";
+
+    const out = chooseExecutionModel({
+      skill: makeSkill("anthropic/pinned-should-be-ignored"),
+      route: makeRoute({ tier: "cheap", risk: "read_only" }),
+      settings,
+    });
+    assert.equal(out.source, "execution-routing");
+    assert.equal(out.tier, "cheap");
+    assert.equal(out.model, "openrouter/anthropic/claude-3-5-haiku");
+  });
+
   it("treats missing route as the default balanced/unknown route", () => {
     const out = chooseExecutionModel({
       skill: makeSkill(undefined),

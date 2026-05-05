@@ -4,7 +4,7 @@
 **Package:** `pi-auggie-router`  
 **Status owner:** TBD  
 **Last updated:** 2026-05-05  
-**Overall status:** Phases 1–3 complete — `chooseExecutionModel` ready; Phase 4 (router wiring) next
+**Overall status:** Phases 1–5 complete — adaptive routing wired + observable; Phase 6 deferred; Phase 7 (docs) next
 
 ## 1. Status legend
 
@@ -24,8 +24,8 @@
 | 1 | Types and config | `[x]` | Types in `src/types.ts`; defaults + validation in `src/config.ts`; tests in `tests/config.test.ts`. |
 | 2 | Judge route output | `[x]` | Judge prompt extended; `coerceExecutionRoute` parses with safe defaults; `JudgeOutcome.route` always populated; tests in `tests/actorJudge.test.ts`. |
 | 3 | Model selection helper | `[x]` | Pure `chooseExecutionModel` in `src/executionRouter.ts`; preference + safety floors + pool fallback chain; tests in `tests/executionRouter.test.ts`. |
-| 4 | Cache-safe router wiring | `[ ]` | Replace direct `mapModel(...)` resolution in `src/index.ts`. |
-| 5 | Observability | `[ ]` | Add structured route logs and optional surfaced decision. |
+| 4 | Cache-safe router wiring | `[x]` | `chooseExecutionModel` wired into `src/index.ts`; one model per run; no prompt mutation. |
+| 5 | Observability | `[x]` | Structured route logs via `host.log`; optional `surfaceDecision` system message. |
 | 6 | Optional cache-aware route memory | `[d]` | Deferred until logs prove same-skill model churn matters. |
 | 7 | README/docs update | `[ ]` | Document new settings and behavior after implementation. |
 | 8 | Release readiness | `[ ]` | Full test/lint/build pass and changelog/release notes. |
@@ -183,6 +183,9 @@ Tasks:
 - `[x]` Resolve selected models through `mapModel(...)`.
 - `[x]` Enforce `allowedProviderPrefixes` through `mapModel(...)`.
 - `[x]` Return display/log reason without mutating sub-agent prompts.
+- `[x]` Export `ChooseExecutionModelInput` for public wrapper/helper typing.
+- `[x]` Document that `tier="balanced"` is only a neutral sentinel for `skill-model`/`fallback` sources; UI must branch on `source` before displaying tier.
+- `[x]` Defensively treat unsupported runtime `skillModelPolicy` values as `ignore` for JS callers bypassing config validation.
 
 Files likely touched:
 
@@ -196,30 +199,22 @@ Goal: replace static model resolution with adaptive selection while preserving c
 
 Tasks:
 
-- `[ ]` Replace direct model resolution in `src/index.ts`:
-
-  ```ts
-  mapModel(skill.rawModel, settings.defaultProvider, settings.allowedProviderPrefixes)
-  ```
-
-  with `chooseExecutionModel(...)`.
-
-- `[ ]` Compute the selected model exactly once before `executeSkill(...)`.
-- `[ ]` Pass selected model unchanged as `resolvedModel`.
-- `[ ]` Ensure no mid-run, per-tool-call, MCP-tool-result, or sub-agent-follow-up re-routing exists.
-- `[ ]` Do not add route metadata to `systemPrompt` in `src/subAgent.ts`.
-- `[ ]` Do not add route metadata to `userPrompt` unless explicitly accepted later; MVP should keep prompts unchanged except existing brief rendering.
-- `[ ]` Keep `systemPrompt` deterministic:
+- `[x]` Replace direct model resolution in `src/index.ts` with `chooseExecutionModel(...)`.
+- `[x]` Compute the selected model exactly once before `executeSkill(...)`.
+- `[x]` Pass selected model unchanged as `resolvedModel`.
+- `[x]` Ensure no mid-run, per-tool-call, MCP-tool-result, or sub-agent-follow-up re-routing exists.
+- `[x]` Do not add route metadata to `systemPrompt` in `src/subAgent.ts`.
+- `[x]` Do not add route metadata to `userPrompt` unless explicitly accepted later; MVP should keep prompts unchanged except existing brief rendering.
+- `[x]` Keep `systemPrompt` deterministic:
   - `skill.instructions`
   - `AUGGIE_DIRECTIVE`
   - optional host appendix
-- `[ ]` Preserve existing behavior when routing is disabled.
+- `[x]` Preserve existing behavior when routing is disabled.
+- `[x]` Apply safety floor: bump cheap→balanced when Judge did not pass.
 
-Files likely touched:
+Files touched:
 
 - `src/index.ts`
-- `src/subAgent.ts` only if tests require verifying no prompt mutation
-- `tests/router.test.ts`
 
 ### Phase 5 — Observability
 
@@ -227,9 +222,9 @@ Goal: make routing decisions debuggable without exposing prompt content or hurti
 
 Tasks:
 
-- `[ ]` Add optional host-visible route decision when `executionRouting.surfaceDecision=true`.
-- `[ ]` Preserve current minimal execution message when `surfaceDecision=false`.
-- `[ ]` Emit structured local log through `host.log?.("info", ...)`:
+- `[x]` Add optional host-visible route decision when `executionRouting.surfaceDecision=true`.
+- `[x]` Preserve current minimal execution message when `surfaceDecision=false`.
+- `[x]` Emit structured local log through `host.log?.("info", ...)`:
 
   ```json
   {
@@ -244,11 +239,11 @@ Tasks:
   }
   ```
 
-- `[ ]` Do not log raw user prompt content.
-- `[ ]` Do not log raw chat history.
-- `[ ]` Do not log secrets or file-system paths beyond existing safe behavior.
+- `[x]` Do not log raw user prompt content.
+- `[x]` Do not log raw chat history.
+- `[x]` Do not log secrets or file-system paths beyond existing safe behavior.
 
-Files likely touched:
+Files touched:
 
 - `src/index.ts`
 - `tests/router.test.ts`
@@ -306,28 +301,28 @@ Tasks:
 
 ### Functional
 
-- `[ ]` With `executionRouting.enabled=false`, existing behavior and tests remain unchanged.
-- `[ ]` With `executionRouting.enabled=true` and no `SKILL.md model:`, the router chooses from configured tier models.
-- `[ ]` With `skillModelPolicy="pin"` and `SKILL.md model:` present, the router uses the skill model exactly as before.
-- `[ ]` With `skillModelPolicy="ignore"`, the router ignores `SKILL.md model:` and chooses from the pool.
-- `[ ]` Selected route remains fixed for the entire sub-agent run.
-- `[ ]` The router does not re-route on MCP tool results or sub-agent follow-up calls.
-- `[ ]` Invalid/missing route metadata falls back safely to `balanced`.
-- `[ ]` `allowedProviderPrefixes` applies to all configured pool models.
+- `[x]` With `executionRouting.enabled=false`, existing behavior and tests remain unchanged.
+- `[x]` With `executionRouting.enabled=true` and no `SKILL.md model:`, the router chooses from configured tier models.
+- `[x]` With `skillModelPolicy="pin"` and `SKILL.md model:` present, the router uses the skill model exactly as before.
+- `[x]` With `skillModelPolicy="ignore"`, the router ignores `SKILL.md model:` and chooses from the pool.
+- `[x]` Selected route remains fixed for the entire sub-agent run.
+- `[x]` The router does not re-route on MCP tool results or sub-agent follow-up calls.
+- `[x]` Invalid/missing route metadata falls back safely to `balanced`.
+- `[x]` `allowedProviderPrefixes` applies to all configured pool models.
 
 ### Cache efficiency
 
-- `[ ]` The selected execution model is computed once before `executeSkill(...)`.
-- `[ ]` The selected execution model is passed unchanged to `host.runSubAgent(...)`.
-- `[ ]` Route tier/model/reason is not injected into the sub-agent system prompt.
-- `[ ]` System prompt construction remains deterministic for the same skill instructions, Auggie directive, and host appendix.
-- `[ ]` Host-visible route messages and structured logs can include tier/model/reason without changing sub-agent prompt text.
+- `[x]` The selected execution model is computed once before `executeSkill(...)`.
+- `[x]` The selected execution model is passed unchanged to `host.runSubAgent(...)`.
+- `[x]` Route tier/model/reason is not injected into the sub-agent system prompt.
+- `[x]` System prompt construction remains deterministic for the same skill instructions, Auggie directive, and host appendix.
+- `[x]` Host-visible route messages and structured logs can include tier/model/reason without changing sub-agent prompt text.
 
 ### UX
 
-- `[ ]` When `surfaceDecision=false`, the user-visible execution message remains current/minimal.
-- `[ ]` When `surfaceDecision=true`, the message includes selected tier and resolved model.
-- `[ ]` User-facing errors do not leak filesystem paths or secrets.
+- `[x]` When `surfaceDecision=false`, the user-visible execution message remains current/minimal.
+- `[x]` When `surfaceDecision=true`, the message includes selected tier and resolved model.
+- `[x]` User-facing errors do not leak filesystem paths or secrets.
 
 ## 5. Test tracker
 
@@ -340,17 +335,17 @@ Add or extend tests for:
 - `[x]` Missing route metadata fallback.
 - `[x]` Preference adjustment.
 - `[x]` Safety floors.
-- `[x]` Missing model-tier fallback.
+- `[x]` Missing model-tier fallback for all PRD chains (`cheap→balanced→frontier`, `balanced→frontier→cheap`, `frontier→balanced→cheap`).
 - `[x]` `skillModelPolicy="pin"`.
 - `[x]` `skillModelPolicy="ignore"`.
 - `[d]` `skillModelPolicy="prefer"` policy behavior; deferred beyond MVP.
 - `[x]` `skillModelPolicy="prefer"` is rejected by config validation until implemented.
 - `[x]` Provider allowlist enforcement on pool models.
-- `[ ]` Router integration message when `surfaceDecision=true`.
-- `[ ]` Router integration message remains minimal when `surfaceDecision=false`.
-- `[ ]` Cache-safety invariant: one resolved execution model per sub-agent run.
-- `[ ]` Prompt determinism: route metadata does not change `systemPrompt` passed to `runSubAgent(...)`.
-- `[ ]` Existing router tests pass unchanged when routing is disabled.
+- `[x]` Router integration message when `surfaceDecision=true`.
+- `[x]` Router integration message remains minimal when `surfaceDecision=false`.
+- `[x]` Cache-safety invariant: one resolved execution model per sub-agent run.
+- `[x]` Prompt determinism: route metadata does not change `systemPrompt` passed to `runSubAgent(...)`.
+- `[x]` Existing router tests pass unchanged when routing is disabled.
 
 ## 6. Metrics tracker
 
@@ -433,8 +428,11 @@ Relevant current files:
 | 2026-05-05 | Phase 1 landed: execution-routing types + config + validation + tests | AI assistant | `src/types.ts`, `src/config.ts`, `tests/config.test.ts`. 75/75 tests pass; lint clean. |
 | 2026-05-05 | Phase 2 landed: Judge `executionRoute` schema + `coerceExecutionRoute` + `JudgeOutcome.route` | AI assistant | `src/actorJudge.ts`, `tests/actorJudge.test.ts`. 84/84 tests pass; lint clean. |
 | 2026-05-05 | Phase 3 landed: pure `chooseExecutionModel` with preference, safety floors, pool fallback, allowlist | AI assistant | `src/executionRouter.ts`, `tests/executionRouter.test.ts`. 105/105 tests pass; lint clean. |
+| 2026-05-05 | Addressed Phase 3 review fixes | AI assistant | Exported input type, covered all fallback chains, clarified tier sentinel UX, defensive unsupported policy handling. |
 | 2026-05-05 | Addressed Phase 1 review fixes | AI assistant | Re-exported public types/defaults, deep-cloned loaded settings, removed unused variable, deferred/rejected `prefer`, updated tracker. |
 | 2026-05-05 | Addressed Phase 2 review fixes | AI assistant | Froze `DEFAULT_EXECUTION_ROUTE`, added partially malformed route integration test, refreshed status notes. |
+| 2026-05-05 | Phase 4 landed: cache-safe router wiring | AI assistant | `src/index.ts` uses `chooseExecutionModel` once per run; safety floor for unpassed judge; 117/117 tests pass. |
+| 2026-05-05 | Phase 5 landed: observability | AI assistant | Structured route logs via `host.log`; optional `surfaceDecision` system message; prompt cache preserved. |
 
 ## 11. Definition of done
 

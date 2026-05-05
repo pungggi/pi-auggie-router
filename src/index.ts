@@ -1,7 +1,7 @@
 import { runActorJudgeLoop } from "./actorJudge.js";
 import { redactSecrets, runAuggieStatus } from "./auggie.js";
 import { loadSettings } from "./config.js";
-import { mapModel } from "./modelMapper.js";
+import { chooseExecutionModel } from "./executionRouter.js";
 import {
   InvalidSkillNameError,
   loadSkill,
@@ -126,13 +126,41 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
         return;
       }
 
+      // Phase 4: compute execution route with safety floor for unpassed judge.
+      let route = outcome.route;
+      if (!outcome.passed && route.tier === "cheap") {
+        route = { ...route, tier: "balanced" };
+      }
+
+      const selection = chooseExecutionModel({ skill, route, settings });
+
       state.beginExecution();
       host.setInputLocked(true, LOCK_REASON);
-      host.postSystemMessage(
-        `[System]: ⚙️ Executing /skill:${skill.name} (Auggie semantic retrieval running...)`
-      );
 
-      const resolvedModel = mapModel(skill.rawModel, settings.defaultProvider, settings.allowedProviderPrefixes);
+      // Phase 5: structured route log.
+      log("info", JSON.stringify({
+        event: "auggie-router.execution-route",
+        skill: skill.name,
+        tier: selection.tier,
+        model: selection.model,
+        source: selection.source,
+        complexity: outcome.route.complexity,
+        risk: outcome.route.risk,
+        confidence: outcome.route.confidence,
+      }));
+
+      // Phase 5: optional surfaced decision message.
+      if (settings.executionRouting.surfaceDecision && selection.source === "execution-routing") {
+        host.postSystemMessage(
+          `[System]: ⚙️ Executing /skill:${skill.name} using ${selection.tier} model ${selection.model}. Reason: ${outcome.route.reason}`
+        );
+      } else {
+        host.postSystemMessage(
+          `[System]: ⚙️ Executing /skill:${skill.name} (Auggie semantic retrieval running...)`
+        );
+      }
+
+      const resolvedModel = selection.model;
       try {
         const result = await executeSkill(host, settings, {
           skill,
@@ -258,7 +286,10 @@ export {
 } from "./actorJudge.js";
 export type { JudgeOutcome } from "./actorJudge.js";
 export { chooseExecutionModel } from "./executionRouter.js";
-export type { ExecutionRouteSelection } from "./executionRouter.js";
+export type {
+  ChooseExecutionModelInput,
+  ExecutionRouteSelection,
+} from "./executionRouter.js";
 export { RouterState } from "./state.js";
 export type {
   ChatMessage,

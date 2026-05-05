@@ -21,9 +21,10 @@ export interface ExecutionRouteSelection {
   /** Fully-qualified gateway model ID, ready for `runSubAgent`. */
   model: string;
   /**
-   * Tier the resolved model represents. For static modes (`enabled=false`
-   * or pinned `SKILL.md model:`) this is `"balanced"` as a neutral sentinel;
-   * the `source` field disambiguates.
+   * Tier the resolved model represents. For static modes (`enabled=false`,
+   * pinned `SKILL.md model:`, or legacy fallback), this is `"balanced"` as a
+   * neutral sentinel; the `source` field disambiguates. UI code must not show
+   * this as a routed tier unless `source === "execution-routing"`.
    */
   tier: ExecutionRoutingTier;
   /** Short, host-displayable explanation. Safe to log. */
@@ -32,7 +33,7 @@ export interface ExecutionRouteSelection {
   source: "skill-model" | "execution-routing" | "fallback";
 }
 
-interface ChooseInput {
+export interface ChooseExecutionModelInput {
   skill: ParsedSkill;
   route: ExecutionRoute | undefined;
   settings: RouterSettings;
@@ -132,10 +133,13 @@ function resolveTier(
  * Phase-3 entry point. See PRD §8 / §10. Pure: no logging, no host calls,
  * no mutation of inputs.
  */
-export function chooseExecutionModel(input: ChooseInput): ExecutionRouteSelection {
+export function chooseExecutionModel(
+  input: ChooseExecutionModelInput
+): ExecutionRouteSelection {
   const { skill, settings } = input;
   const route = input.route ?? DEFAULT_EXECUTION_ROUTE;
   const cfg = settings.executionRouting;
+  const skillModelPolicy = cfg.skillModelPolicy === "pin" ? "pin" : "ignore";
 
   // 1. Adaptive routing disabled — preserve legacy behavior exactly.
   if (!cfg.enabled) {
@@ -155,7 +159,7 @@ export function chooseExecutionModel(input: ChooseInput): ExecutionRouteSelectio
   }
 
   // 2. Pin policy with a SKILL.md model — honour it exactly.
-  if (cfg.skillModelPolicy === "pin" && skill.rawModel && skill.rawModel.trim()) {
+  if (skillModelPolicy === "pin" && skill.rawModel && skill.rawModel.trim()) {
     const model = mapModel(
       skill.rawModel,
       settings.defaultProvider,
@@ -194,7 +198,9 @@ export function chooseExecutionModel(input: ChooseInput): ExecutionRouteSelectio
   return {
     model: fallbackModel,
     tier: "balanced",
-    reason: "Execution-routing pool unavailable; fell back to default model resolution.",
+    reason: skill.rawModel && skill.rawModel.trim()
+      ? "Execution-routing pool unavailable; used legacy SKILL.md model resolution."
+      : "Execution-routing pool unavailable; used legacy default model resolution.",
     source: "fallback",
   };
 }

@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Adaptive execution model routing** — opt-in feature that classifies each `/skill` invocation by complexity and risk, then selects an appropriate model from a configurable cheap/balanced/frontier pool. Disabled by default; existing behavior is preserved. ([PRD](docs/PRD-adaptive-execution-model-routing.md))
+- **Adaptive execution model routing** — opt-in feature that classifies each `/skill` invocation by complexity and risk, then selects an appropriate model from a configurable cheap/balanced/frontier pool. Disabled by default; existing behavior is preserved. See the README for configuration and behavior details.
 
   New settings under `auggieRouter.executionRouting`:
 
@@ -36,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New public exports: `chooseExecutionModel`, `ChooseExecutionModelInput`, `ExecutionRouteSelection`, `DEFAULT_EXECUTION_ROUTE`, `coerceExecutionRoute`, `ExecutionRoute`, `ExecutionRoutingPreference`, `ExecutionRoutingSettings`, `ExecutionRoutingTier`, `SkillModelPolicy`, `DEFAULT_EXECUTION_ROUTING`.
 
 ### Changed
+
+- Provider allowlists now apply to the final resolved model provider for every `mapModel()` path, including defaultProvider-prefixed vendor/bare models and fallback defaults.
+
+- Extension bridge child-process handling now uses private temp directories/files, caps captured stdout/stderr, and redacts secrets in child-process stderr before including it in errors.
 
 - Execution model resolution in `src/index.ts` now flows through `chooseExecutionModel()` instead of calling `mapModel()` directly. When `executionRouting.enabled` is `false`, the legacy path is used identically to before.
 

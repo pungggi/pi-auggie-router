@@ -16,6 +16,7 @@
   "files": [
     "dist",
     "README.md",
+    "GETTING-STARTED.md",
     "CHANGELOG.md",
     "LICENSE"
   ],

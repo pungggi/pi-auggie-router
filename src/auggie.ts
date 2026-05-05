@@ -43,6 +43,15 @@ export function redactSecrets(text: string): string {
   return result;
 }
 
+export function appendCapped(
+  current: string,
+  chunk: Buffer | string,
+  maxChars: number
+): string {
+  const next = current + chunk.toString();
+  return next.length > maxChars ? next.slice(-maxChars) : next;
+}
+
 export function runAuggieStatus(
   settings?: Pick<RouterSettings, "auggieBinPath">,
   timeoutMs = 5_000
@@ -67,8 +76,8 @@ export function runAuggieStatus(
     }
 
     let stderr = "";
-    child.stderr?.on("data", (d) => {
-      stderr += d.toString();
+    child.stderr?.on("data", (d: Buffer) => {
+      stderr = appendCapped(stderr, d, 64 * 1024);
     });
     child.stdout?.on("data", () => {
       // discard; we only care about exit code

@@ -4,6 +4,7 @@ import {
   AUGGIE_DIRECTIVE,
   AUGGIE_MCP_NAME,
   AUGGIE_TOOL_NAME,
+  appendCapped,
   buildAuggieMcpSpec,
   makeOverflowMiddleware,
   redactSecrets,
@@ -88,6 +89,16 @@ describe("AUGGIE_DIRECTIVE", () => {
   it("instructs the sub-agent to use codebase-retrieval", () => {
     assert.match(AUGGIE_DIRECTIVE, /codebase-retrieval/);
     assert.match(AUGGIE_DIRECTIVE, /Do not attempt to run auggie in the terminal/);
+  });
+});
+
+describe("appendCapped", () => {
+  it("keeps only the last max characters", () => {
+    assert.equal(appendCapped("abc", "def", 4), "cdef");
+  });
+
+  it("accepts Buffer chunks", () => {
+    assert.equal(appendCapped("abc", Buffer.from("def"), 5), "bcdef");
   });
 });
 

@@ -413,12 +413,16 @@ Relevant current files:
 - `src/actorJudge.ts`
 - `src/config.ts`
 - `src/index.ts`
+- `src/executionRouter.ts`
 - `src/modelMapper.ts`
 - `src/subAgent.ts`
 - `src/types.ts`
 - `tests/actorJudge.test.ts`
+- `tests/config.test.ts`
+- `tests/executionRouter.test.ts`
 - `tests/modelMapper.test.ts`
 - `tests/router.test.ts`
+- `CHANGELOG.md`
 
 ## 10. Progress log
 
@@ -439,18 +443,20 @@ Relevant current files:
 | 2026-05-05 | Phase 7 landed: README/docs update | AI assistant | Added adaptive routing section, config table, preference/safety/policy docs, execution flow update, migration note. |
 | 2026-05-05 | Addressed Phase 7 review fixes | AI assistant | Reduced duplicate config, clarified surfaceDecision/fallback/minimum-tier behavior, refreshed implementation notes and dist policy. |
 | 2026-05-05 | Phase 8: release readiness | AI assistant | v1.1.0 minor bump. CHANGELOG.md created. All acceptance criteria met. |
+| 2026-05-05 | Addressed Phase 8 review fixes | AI assistant | Updated package-lock version, removed broken packaged PRD link, completed DoD checklist, refreshed relevant files. |
+| 2026-05-05 | Security hardening review fixes | AI assistant | Enforced provider allowlist on final mapped models; hardened extension bridge temp files/stdout/stderr; added capped output helper/tests. |
 
 ## 11. Definition of done
 
 The PRD implementation is complete when:
 
-- `[ ]` All MVP checklist items are complete.
-- `[ ]` All functional acceptance criteria are satisfied.
-- `[ ]` All cache-efficiency acceptance criteria are satisfied.
-- `[ ]` All UX acceptance criteria are satisfied.
-- `[ ]` Tests cover config, route parsing, model selection, router integration, and cache invariants.
-- `[ ]` `npm test` passes.
-- `[ ]` `npm run lint` passes.
-- `[ ]` `npm run build` passes.
-- `[ ]` README documents the new configuration and backwards-compatible default behavior.
-- `[ ]` Any deferred decisions are explicitly marked `[d]` or moved to a follow-up PRD.
+- `[x]` All MVP checklist items are complete.
+- `[x]` All functional acceptance criteria are satisfied.
+- `[x]` All cache-efficiency acceptance criteria are satisfied.
+- `[x]` All UX acceptance criteria are satisfied.
+- `[x]` Tests cover config, route parsing, model selection, router integration, and cache invariants.
+- `[x]` `npm test` passes.
+- `[x]` `npm run lint` passes.
+- `[x]` `npm run build` passes.
+- `[x]` README documents the new configuration and backwards-compatible default behavior.
+- `[x]` Any deferred decisions are explicitly marked `[d]` or moved to a follow-up PRD.

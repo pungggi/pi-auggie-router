@@ -8,8 +8,10 @@
  * is returned untouched. A single-segment vendor-prefixed string like
  * `anthropic/claude-3-7-sonnet` only gets the provider prefix added.
  *
- * SEC-06: If `allowedProviderPrefixes` is non-empty, fully-qualified model
- * strings whose first path segment doesn't match an allowed prefix are rejected.
+ * SEC-06: If `allowedProviderPrefixes` is non-empty, every resolved model's
+ * provider prefix must match an allowed prefix. This includes fallback and
+ * defaultProvider-prefixed vendor/bare model inputs, not only already fully
+ * qualified raw model strings.
  */
 
 const ANTHROPIC_PREFIX = "anthropic/";
@@ -27,6 +29,18 @@ export class DisallowedProviderError extends Error {
   }
 }
 
+function assertAllowedProvider(
+  resolvedModel: string,
+  allowedProviderPrefixes: string[]
+): string {
+  if (allowedProviderPrefixes.length === 0) return resolvedModel;
+  const modelProvider = resolvedModel.split("/")[0]!;
+  if (!allowedProviderPrefixes.includes(modelProvider)) {
+    throw new DisallowedProviderError(resolvedModel, allowedProviderPrefixes);
+  }
+  return resolvedModel;
+}
+
 export function mapModel(
   rawModel: string | undefined,
   defaultProvider: string,
@@ -39,27 +53,21 @@ export function mapModel(
 
   const fallback = `${provider}/anthropic/claude-3-5-sonnet`;
   if (!rawModel || !rawModel.trim()) {
-    return fallback;
+    return assertAllowedProvider(fallback, allowedProviderPrefixes);
   }
 
   const m = rawModel.trim();
 
   // Already fully qualified (provider/vendor/model).
   if (m.split("/").length >= 3) {
-    if (allowedProviderPrefixes.length > 0) {
-      const modelProvider = m.split("/")[0]!;
-      if (!allowedProviderPrefixes.includes(modelProvider)) {
-        throw new DisallowedProviderError(m, allowedProviderPrefixes);
-      }
-    }
-    return m;
+    return assertAllowedProvider(m, allowedProviderPrefixes);
   }
 
   // vendor/model — only prefix the provider.
   if (m.includes("/")) {
-    return `${provider}/${m}`;
+    return assertAllowedProvider(`${provider}/${m}`, allowedProviderPrefixes);
   }
 
   // Bare model — assume Anthropic per PRD example.
-  return `${provider}/${ANTHROPIC_PREFIX}${m}`;
+  return assertAllowedProvider(`${provider}/${ANTHROPIC_PREFIX}${m}`, allowedProviderPrefixes);
 }

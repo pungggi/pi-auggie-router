@@ -4,6 +4,8 @@
 > Tightly couples Anthropic-style `SKILL.md` execution with the
 > Augment Code (`auggie`) Context Engine via MCP.
 
+**New to pi-auggie-router?** Start with the [Getting Started guide](GETTING-STARTED.md) for a step-by-step walkthrough of your first skill workflow.
+
 `pi-auggie-router` intercepts `/skill:<name>` commands inside a Pi host,
 parses the matching `SKILL.md`, runs a 2-pass **Actor/Judge** brief loop
 against a cheap routing model, then dispatches the work to an isolated Pi

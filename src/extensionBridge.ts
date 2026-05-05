@@ -11,9 +11,10 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, unlinkSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, dirname } from "node:path";
+import { appendCapped, redactSecrets } from "./auggie.js";
 import type {
   ChatMessage,
   LLMCallOptions,
@@ -29,11 +30,14 @@ export interface BridgeOptions {
 }
 
 function writeTempFile(prefix: string, content: string): string {
-  const tmpDir = join(tmpdir(), `pi-bridge-${Date.now()}`);
-  mkdirSync(tmpDir, { recursive: true });
+  const tmpDir = mkdtempSync(join(tmpdir(), "pi-bridge-"));
   const filePath = join(tmpDir, `${prefix}.md`);
-  writeFileSync(filePath, content, { encoding: "utf8" });
+  writeFileSync(filePath, content, { encoding: "utf8", mode: 0o600 });
   return filePath;
+}
+
+function safeChildStderr(stderr: string): string {
+  return redactSecrets(stderr.trim()).slice(0, 1_000);
 }
 
 function cleanupTemp(filePath: string): void {
@@ -77,8 +81,8 @@ async function callLLmViaChildProcess(opts: LLMCallOptions): Promise<LLMResponse
 
     let stdout = "";
     let stderr = "";
-    child.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
-    child.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
+    child.stdout.on("data", (d: Buffer) => { stdout = appendCapped(stdout, d, 1024 * 1024); });
+    child.stderr.on("data", (d: Buffer) => { stderr = appendCapped(stderr, d, 256 * 1024); });
 
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
@@ -96,7 +100,7 @@ async function callLLmViaChildProcess(opts: LLMCallOptions): Promise<LLMResponse
       clearTimeout(timer);
       if (systemFile) cleanupTemp(systemFile);
       if (code !== 0) {
-        reject(new Error(`callLLM child exited with code ${code}: ${stderr.trim()}`));
+        reject(new Error(`callLLM child exited with code ${code}: ${safeChildStderr(stderr)}`));
         return;
       }
       try {
@@ -155,8 +159,8 @@ async function runSubAgentViaChildProcess(opts: SubAgentRunOptions): Promise<Sub
 
     let stdout = "";
     let stderr = "";
-    child.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
-    child.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
+    child.stdout.on("data", (d: Buffer) => { stdout = appendCapped(stdout, d, 4 * 1024 * 1024); });
+    child.stderr.on("data", (d: Buffer) => { stderr = appendCapped(stderr, d, 256 * 1024); });
 
     const timeout = opts.totalTimeoutMs || 300_000;
     const timer = setTimeout(() => {
@@ -180,7 +184,7 @@ async function runSubAgentViaChildProcess(opts: SubAgentRunOptions): Promise<Sub
       clearTimeout(timer);
       cleanupFiles();
       if (code !== 0) {
-        reject(new Error(`Sub-agent exited with code ${code}: ${stderr.trim()}`));
+        reject(new Error(`Sub-agent exited with code ${code}: ${safeChildStderr(stderr)}`));
         return;
       }
       try {

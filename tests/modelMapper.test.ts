@@ -60,4 +60,22 @@ describe("mapModel", () => {
       DisallowedProviderError
     );
   });
+
+  it("enforces allowlist on defaultProvider-prefixed vendor and bare models", () => {
+    assert.throws(
+      () => mapModel("anthropic/claude-3-5-haiku", "evil", ["openrouter"]),
+      DisallowedProviderError
+    );
+    assert.throws(
+      () => mapModel("claude-3-5-haiku", "evil", ["openrouter"]),
+      DisallowedProviderError
+    );
+  });
+
+  it("enforces allowlist on fallback defaultProvider", () => {
+    assert.throws(
+      () => mapModel(undefined, "evil", ["openrouter"]),
+      DisallowedProviderError
+    );
+  });
 });

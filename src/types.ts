@@ -139,7 +139,7 @@ export type ExecutionRoutingPreference =
 
 export type ExecutionRoutingTier = "cheap" | "balanced" | "frontier";
 
-export type SkillModelPolicy = "pin" | "prefer" | "ignore";
+export type SkillModelPolicy = "pin" | "ignore";
 
 export interface ExecutionRoutingSettings {
   enabled: boolean;

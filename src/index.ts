@@ -1,6 +1,6 @@
 import { runActorJudgeLoop } from "./actorJudge.js";
 import { redactSecrets, runAuggieStatus } from "./auggie.js";
-import { DEFAULT_SETTINGS, loadSettings } from "./config.js";
+import { loadSettings } from "./config.js";
 import { mapModel } from "./modelMapper.js";
 import {
   InvalidSkillNameError,
@@ -238,7 +238,7 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
   };
 }
 
-export { DEFAULT_SETTINGS };
+export { DEFAULT_EXECUTION_ROUTING, DEFAULT_SETTINGS } from "./config.js";
 export { mapModel, DisallowedProviderError } from "./modelMapper.js";
 export {
   matchSkillCommand,
@@ -251,10 +251,19 @@ export {
 export { composeMiddleware, makeOverflowMiddleware, redactSecrets, runAuggieStatus, AUGGIE_DIRECTIVE, AUGGIE_MCP_NAME, AUGGIE_TOOL_NAME } from "./auggie.js";
 export { createExtensionBridge } from "./extensionBridge.js";
 export type { BridgeOptions } from "./extensionBridge.js";
-export { runActorJudgeLoop } from "./actorJudge.js";
+export {
+  DEFAULT_EXECUTION_ROUTE,
+  coerceExecutionRoute,
+  runActorJudgeLoop,
+} from "./actorJudge.js";
+export type { JudgeOutcome } from "./actorJudge.js";
 export { RouterState } from "./state.js";
 export type {
   ChatMessage,
+  ExecutionRoute,
+  ExecutionRoutingPreference,
+  ExecutionRoutingSettings,
+  ExecutionRoutingTier,
   JudgeRubric,
   LLMCallOptions,
   LLMResponse,
@@ -263,6 +272,7 @@ export type {
   PiHost,
   RouterSettings,
   SkillBrief,
+  SkillModelPolicy,
   SubAgentResult,
   SubAgentRunOptions,
   ToolCallContext,

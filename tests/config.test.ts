@@ -62,6 +62,27 @@ describe("config — executionRouting defaults", () => {
       cleanup();
     }
   });
+
+  it("loadSettings returns fresh nested defaults to avoid shared mutation", () => {
+    const { workspace, cleanup } = withWorkspace(undefined);
+    try {
+      const { host } = fakeHost(workspace);
+      const first = loadSettings(host);
+      first.executionRouting.enabled = true;
+      first.executionRouting.models.cheap = "mutated/provider/model";
+      first.allowedProviderPrefixes.push("mutated");
+
+      const second = loadSettings(host);
+      assert.equal(second.executionRouting.enabled, false);
+      assert.equal(second.executionRouting.models.cheap, "anthropic/claude-3-5-haiku");
+      assert.deepEqual(second.allowedProviderPrefixes, []);
+      assert.notEqual(first.executionRouting, second.executionRouting);
+      assert.notEqual(first.executionRouting.models, second.executionRouting.models);
+      assert.notEqual(first.allowedProviderPrefixes, second.allowedProviderPrefixes);
+    } finally {
+      cleanup();
+    }
+  });
 });
 
 describe("config — executionRouting validation", () => {
@@ -125,6 +146,20 @@ describe("config — executionRouting validation", () => {
   it("rejects invalid skillModelPolicy and warns", () => {
     const { workspace, cleanup } = withWorkspace({
       executionRouting: { skillModelPolicy: "bogus" },
+    });
+    try {
+      const { host, warnings } = fakeHost(workspace);
+      const s = loadSettings(host);
+      assert.equal(s.executionRouting.skillModelPolicy, "pin");
+      assert.ok(warnings.some((w) => w.includes("executionRouting.skillModelPolicy")));
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("defers skillModelPolicy=prefer until the policy is implemented", () => {
+    const { workspace, cleanup } = withWorkspace({
+      executionRouting: { skillModelPolicy: "prefer" },
     });
     try {
       const { host, warnings } = fakeHost(workspace);

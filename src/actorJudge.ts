@@ -1,11 +1,44 @@
 import type {
   ChatMessage,
+  ExecutionRoute,
+  ExecutionRoutingTier,
   JudgeRubric,
   ParsedSkill,
   PiHost,
   RouterSettings,
   SkillBrief,
 } from "./types.js";
+
+/**
+ * Phase-2 fallback route used when Judge output omits or malforms
+ * `executionRoute`. Matches PRD §9.
+ */
+export const DEFAULT_EXECUTION_ROUTE: ExecutionRoute = {
+  tier: "balanced",
+  complexity: "medium",
+  risk: "unknown",
+  confidence: 0,
+  reason: "Routing metadata unavailable; using balanced default.",
+};
+
+const TIER_SET: ReadonlySet<ExecutionRoutingTier> = new Set([
+  "cheap",
+  "balanced",
+  "frontier",
+]);
+const COMPLEXITY_SET: ReadonlySet<ExecutionRoute["complexity"]> = new Set([
+  "low",
+  "medium",
+  "high",
+]);
+const RISK_SET: ReadonlySet<ExecutionRoute["risk"]> = new Set([
+  "read_only",
+  "small_edit",
+  "multi_file_edit",
+  "architecture_change",
+  "unknown",
+]);
+const MAX_REASON_CHARS = 500;
 
 const ACTOR_SYSTEM_PROMPT = `You are the Actor model in a 2-pass skill-routing loop.
 You produce a concise "Skill Execution Brief" for a downstream sub-agent.
@@ -21,20 +54,39 @@ Rules:
 - If a constraint is missing, leave it out — do not guess.`;
 
 const JUDGE_SYSTEM_PROMPT = `You are the Judge model in a 2-pass skill-routing loop.
-You evaluate whether the Actor's brief is sufficient to begin execution.
+You evaluate whether the Actor's brief is sufficient to begin execution AND
+classify the task so a host router can pick an appropriately-sized model.
 Output STRICT JSON only, no prose, matching this schema:
 {
   "hasUserGoal": boolean,
   "hasRequiredInputs": boolean,
   "hasScopeBoundary": boolean,
   "isUnambiguous": boolean,
-  "missingRequirementQuestion": string | null
+  "missingRequirementQuestion": string | null,
+  "executionRoute": {
+    "tier": "cheap" | "balanced" | "frontier",
+    "complexity": "low" | "medium" | "high",
+    "risk": "read_only" | "small_edit" | "multi_file_edit" | "architecture_change" | "unknown",
+    "confidence": number,        // 0..1
+    "reason": string             // <= 500 chars; explain the tier choice
+  }
 }
 Rules:
 - Set each boolean true only if the brief satisfies it on its own merit.
 - If any boolean is false, populate "missingRequirementQuestion" with ONE
   short, user-facing question that would unblock execution.
-- If all booleans are true, "missingRequirementQuestion" must be null.`;
+- If all booleans are true, "missingRequirementQuestion" must be null.
+- Always emit "executionRoute"; if the brief is too thin, lower "confidence"
+  and choose at least "balanced".
+- Prefer the cheapest tier likely to complete the task well.
+- Route read-only or context-only tasks (explanations, summaries, lookups,
+  documentation drafting) to "cheap".
+- Route risky multi-file or architecture/design changes to "frontier".
+- Do not pick "frontier" merely because code is involved; reserve it for
+  genuine complexity or risk.
+- Keep "reason" terse and stable. Do not include timestamps, run IDs, model
+  names, provider hints, or cost estimates — that data busts caches and the
+  sub-agent must never see its own routing decision.`;
 
 /** SEC-05: maximum LLM response size before JSON.parse (256 KB). */
 const MAX_LLM_RESPONSE_BYTES = 256 * 1024;
@@ -49,6 +101,12 @@ export interface JudgeOutcome {
   passed: boolean;
   /** Number of Actor passes performed (1 or 2). */
   iterations: number;
+  /**
+   * Routing metadata produced by the Judge alongside the rubric.
+   * Always populated — falls back to {@link DEFAULT_EXECUTION_ROUTE}
+   * when missing, malformed, or extracted from a failing parse.
+   */
+  route: ExecutionRoute;
 }
 
 function rubricPassed(r: JudgeRubric): boolean {
@@ -147,6 +205,55 @@ function coerceBrief(raw: unknown): SkillBrief {
   };
 }
 
+/**
+ * Coerce a raw `executionRoute` object from the Judge response into a
+ * fully-typed {@link ExecutionRoute}, defaulting any invalid or missing
+ * field. Never throws. The full default is returned when the input is
+ * not an object.
+ */
+export function coerceExecutionRoute(raw: unknown): ExecutionRoute {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return { ...DEFAULT_EXECUTION_ROUTE };
+  }
+  const obj = raw as Record<string, unknown>;
+
+  const tier =
+    typeof obj.tier === "string" &&
+    (TIER_SET as ReadonlySet<string>).has(obj.tier)
+      ? (obj.tier as ExecutionRoutingTier)
+      : DEFAULT_EXECUTION_ROUTE.tier;
+
+  const complexity =
+    typeof obj.complexity === "string" &&
+    (COMPLEXITY_SET as ReadonlySet<string>).has(obj.complexity)
+      ? (obj.complexity as ExecutionRoute["complexity"])
+      : DEFAULT_EXECUTION_ROUTE.complexity;
+
+  const risk =
+    typeof obj.risk === "string" &&
+    (RISK_SET as ReadonlySet<string>).has(obj.risk)
+      ? (obj.risk as ExecutionRoute["risk"])
+      : DEFAULT_EXECUTION_ROUTE.risk;
+
+  let confidence = DEFAULT_EXECUTION_ROUTE.confidence;
+  if (typeof obj.confidence === "number" && Number.isFinite(obj.confidence)) {
+    confidence = Math.min(1, Math.max(0, obj.confidence));
+  }
+
+  let reason = DEFAULT_EXECUTION_ROUTE.reason;
+  if (typeof obj.reason === "string") {
+    const trimmed = obj.reason.trim();
+    if (trimmed) {
+      reason =
+        trimmed.length > MAX_REASON_CHARS
+          ? trimmed.slice(0, MAX_REASON_CHARS)
+          : trimmed;
+    }
+  }
+
+  return { tier, complexity, risk, confidence, reason };
+}
+
 function coerceRubric(raw: unknown): JudgeRubric {
   const obj = (raw ?? {}) as Record<string, unknown>;
   const q = obj.missingRequirementQuestion;
@@ -231,6 +338,7 @@ export async function runActorJudgeLoop(
     hasScopeBoundary: false,
     isUnambiguous: false,
   };
+  let lastRoute: ExecutionRoute = { ...DEFAULT_EXECUTION_ROUTE };
 
   for (let i = 1; i <= settings.maxJudgeIterations; i++) {
     const actorRes = await callWithTimeout(
@@ -270,8 +378,15 @@ export async function runActorJudgeLoop(
     );
 
     let rubric: JudgeRubric;
+    let route: ExecutionRoute;
     try {
-      rubric = coerceRubric(extractJson(judgeRes.text));
+      const parsed = extractJson(judgeRes.text);
+      rubric = coerceRubric(parsed);
+      const rawRoute =
+        parsed && typeof parsed === "object" && !Array.isArray(parsed)
+          ? (parsed as Record<string, unknown>).executionRoute
+          : undefined;
+      route = coerceExecutionRoute(rawRoute);
     } catch {
       rubric = {
         hasUserGoal: false,
@@ -282,13 +397,15 @@ export async function runActorJudgeLoop(
           ? "Routing model timed out. Could you restate the goal more specifically?"
           : "Could you restate what you want this skill to do, and on which files?",
       };
+      route = { ...DEFAULT_EXECUTION_ROUTE };
     }
 
     lastBrief = brief;
     lastRubric = rubric;
+    lastRoute = route;
 
     if (rubricPassed(rubric)) {
-      return { brief, rubric, passed: true, iterations: i };
+      return { brief, rubric, passed: true, iterations: i, route };
     }
 
     priorBrief = brief;
@@ -300,5 +417,6 @@ export async function runActorJudgeLoop(
     rubric: lastRubric,
     passed: false,
     iterations: settings.maxJudgeIterations,
+    route: lastRoute,
   };
 }

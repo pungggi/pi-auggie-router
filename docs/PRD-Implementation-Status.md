@@ -4,7 +4,7 @@
 **Package:** `pi-auggie-router`  
 **Status owner:** TBD  
 **Last updated:** 2026-05-05  
-**Overall status:** Phase 1 complete — types and config landed; Phase 2 next
+**Overall status:** Phases 1–2 complete — Judge emits and parses `ExecutionRoute`; Phase 3 next
 
 ## 1. Status legend
 
@@ -22,7 +22,7 @@
 | --- | --- | --- | --- |
 | 0 | PRD and tracking docs | `[x]` | PRD and this status tracker created. |
 | 1 | Types and config | `[x]` | Types in `src/types.ts`; defaults + validation in `src/config.ts`; tests in `tests/config.test.ts`. |
-| 2 | Judge route output | `[ ]` | Extend Actor/Judge output with `ExecutionRoute`. |
+| 2 | Judge route output | `[x]` | Judge prompt extended; `coerceExecutionRoute` parses with safe defaults; `JudgeOutcome.route` always populated; tests in `tests/actorJudge.test.ts`. |
 | 3 | Model selection helper | `[ ]` | Add pure `chooseExecutionModel(...)`. |
 | 4 | Cache-safe router wiring | `[ ]` | Replace direct `mapModel(...)` resolution in `src/index.ts`. |
 | 5 | Observability | `[ ]` | Add structured route logs and optional surfaced decision. |
@@ -59,8 +59,9 @@ Tasks:
   - `frontier`
 - `[x]` Add `SkillModelPolicy` type:
   - `pin`
-  - `prefer`
   - `ignore`
+- `[d]` Defer `skillModelPolicy="prefer"` until the policy is implemented.
+  - Note: the PRD still lists `prefer` as an eventual policy, but Phase 1 intentionally rejects it in config until behavior exists.
 - `[x]` Add `ExecutionRoutingSettings` interface.
 - `[x]` Add `executionRouting` to `RouterSettings`.
 - `[x]` Add defaults to `DEFAULT_SETTINGS`:
@@ -82,6 +83,8 @@ Tasks:
 - `[x]` Validate nested `executionRouting` settings in `loadSettings(...)`.
 - `[x]` Preserve existing behavior when `executionRouting.enabled=false`.
 - `[ ]` Ensure all configured model IDs still pass through `mapModel(...)` before execution. *(deferred to Phase 3 — pool resolution lives in `chooseExecutionModel`)*
+- `[x]` Re-export new public types and `DEFAULT_EXECUTION_ROUTING` from `src/index.ts`.
+- `[x]` Return fresh nested settings from `loadSettings(...)` to avoid shared mutation of defaults.
 
 Files likely touched:
 
@@ -95,7 +98,7 @@ Goal: reuse the existing Actor/Judge loop as the lightweight planner.
 
 Tasks:
 
-- `[ ]` Add `ExecutionRoute` type:
+- `[x]` Add `ExecutionRoute` type:
 
   ```ts
   export interface ExecutionRoute {
@@ -112,17 +115,17 @@ Tasks:
   }
   ```
 
-- `[ ]` Extend `JudgeOutcome` with `route?: ExecutionRoute`.
-- `[ ]` Update `JUDGE_SYSTEM_PROMPT` strict JSON schema to include `executionRoute`.
-- `[ ]` Add prompt rules:
+- `[x]` Extend `JudgeOutcome` with `route: ExecutionRoute` (always populated; never undefined).
+- `[x]` Update `JUDGE_SYSTEM_PROMPT` strict JSON schema to include `executionRoute`.
+- `[x]` Add prompt rules:
   - prefer cheapest tier likely to complete well
   - route read-only/context tasks to `cheap`
   - route risky multi-file/architecture work to `frontier`
   - choose at least `balanced` when unclear
   - do not include volatile cache-busting data
   - do not instruct the sub-agent about tier/model
-- `[ ]` Implement `coerceExecutionRoute(...)`.
-- `[ ]` Default malformed/missing route metadata to:
+- `[x]` Implement `coerceExecutionRoute(...)`.
+- `[x]` Default malformed/missing route metadata to:
 
   ```ts
   {
@@ -134,7 +137,7 @@ Tasks:
   }
   ```
 
-- `[ ]` Keep old Judge responses compatible where possible.
+- `[x]` Keep old Judge responses compatible where possible.
 
 Files likely touched:
 
@@ -331,15 +334,16 @@ Add or extend tests for:
 
 - `[x]` Config defaults.
 - `[x]` Config validation for nested execution-routing values.
-- `[ ]` Route parsing/coercion.
-- `[ ]` Malformed route metadata fallback.
-- `[ ]` Missing route metadata fallback.
+- `[x]` Route parsing/coercion.
+- `[x]` Malformed route metadata fallback.
+- `[x]` Missing route metadata fallback.
 - `[ ]` Preference adjustment.
 - `[ ]` Safety floors.
 - `[ ]` Missing model-tier fallback.
 - `[ ]` `skillModelPolicy="pin"`.
 - `[ ]` `skillModelPolicy="ignore"`.
-- `[ ]` `skillModelPolicy="prefer"`, if included beyond MVP.
+- `[d]` `skillModelPolicy="prefer"` policy behavior; deferred beyond MVP.
+- `[x]` `skillModelPolicy="prefer"` is rejected by config validation until implemented.
 - `[ ]` Provider allowlist enforcement on pool models.
 - `[ ]` Router integration message when `surfaceDecision=true`.
 - `[ ]` Router integration message remains minimal when `surfaceDecision=false`.
@@ -393,7 +397,7 @@ Target outcomes after tuning:
 | Support skill frontmatter `minTier` / `maxTier`? | `[!]` | yes / no / later | Defer. |
 | Expose programmatic `chooseExecutionModel(...)` override? | `[!]` | yes / no / later | Defer. |
 | Include route metadata in final assistant output? | `[!]` | final output / system message / logs only | System message and logs only. |
-| Ship `skillModelPolicy="prefer"` in v1? | `[!]` | include / defer | Defer; MVP only needs `pin` and `ignore`. |
+| Ship `skillModelPolicy="prefer"` in v1? | `[d]` | include / defer | Deferred; config rejects `prefer` until policy behavior is implemented. |
 | Add same-skill route memory after MVP? | `[!]` | yes / no / after metrics | After metrics only. |
 | Ask Pi host for token/cache metrics? | `[!]` | yes / no / later | Later; not required for MVP. |
 
@@ -403,7 +407,7 @@ As of 2026-05-05:
 
 - Existing code still resolves execution model from `SKILL.md` frontmatter through `mapModel(...)`.
 - Existing Actor/Judge loop returns only `brief`, `rubric`, `passed`, and `iterations`.
-- Adaptive execution routing has not been implemented yet.
+- Adaptive execution routing has not been wired into execution yet.
 - Cache-efficiency requirements are documented but not yet enforced by tests.
 
 Relevant current files:
@@ -426,6 +430,8 @@ Relevant current files:
 | 2026-05-05 | Added cache-efficiency requirements to PRD | AI assistant | Sticky per-run routing, deterministic prompts, deferred route memory. |
 | 2026-05-05 | Created implementation status tracker | AI assistant | This file. |
 | 2026-05-05 | Phase 1 landed: execution-routing types + config + validation + tests | AI assistant | `src/types.ts`, `src/config.ts`, `tests/config.test.ts`. 75/75 tests pass; lint clean. |
+| 2026-05-05 | Phase 2 landed: Judge `executionRoute` schema + `coerceExecutionRoute` + `JudgeOutcome.route` | AI assistant | `src/actorJudge.ts`, `tests/actorJudge.test.ts`. 84/84 tests pass; lint clean. |
+| 2026-05-05 | Addressed Phase 1 review fixes | AI assistant | Re-exported public types/defaults, deep-cloned loaded settings, removed unused variable, deferred/rejected `prefer`, updated tracker. |
 
 ## 11. Definition of done
 

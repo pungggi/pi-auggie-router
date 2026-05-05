@@ -36,6 +36,37 @@ export const DEFAULT_SETTINGS: RouterSettings = {
   executionRouting: DEFAULT_EXECUTION_ROUTING,
 };
 
+function cloneExecutionRouting(
+  settings: ExecutionRoutingSettings = DEFAULT_EXECUTION_ROUTING
+): ExecutionRoutingSettings {
+  return {
+    ...settings,
+    models: { ...settings.models },
+  };
+}
+
+function cloneDefaultSettings(): RouterSettings {
+  return {
+    ...DEFAULT_SETTINGS,
+    allowedProviderPrefixes: [...DEFAULT_SETTINGS.allowedProviderPrefixes],
+    executionRouting: cloneExecutionRouting(),
+  };
+}
+
+function mergeSettings(validated: Partial<RouterSettings>): RouterSettings {
+  const base = cloneDefaultSettings();
+  return {
+    ...base,
+    ...validated,
+    allowedProviderPrefixes: validated.allowedProviderPrefixes
+      ? [...validated.allowedProviderPrefixes]
+      : base.allowedProviderPrefixes,
+    executionRouting: validated.executionRouting
+      ? cloneExecutionRouting(validated.executionRouting)
+      : base.executionRouting,
+  };
+}
+
 const PREFERENCE_VALUES: ReadonlySet<ExecutionRoutingPreference> = new Set([
   "preferCheap",
   "balanced",
@@ -44,7 +75,6 @@ const PREFERENCE_VALUES: ReadonlySet<ExecutionRoutingPreference> = new Set([
 
 const POLICY_VALUES: ReadonlySet<SkillModelPolicy> = new Set([
   "pin",
-  "prefer",
   "ignore",
 ]);
 
@@ -346,9 +376,8 @@ function validateSettings(
 export function loadSettings(host: PiHost): RouterSettings {
   const path = host.resolveWorkspacePath(".pi/settings.json");
   if (!existsSync(path)) {
-    return { ...DEFAULT_SETTINGS };
+    return cloneDefaultSettings();
   }
-  const noop = () => {};
   const log = host.log ?? (() => {});
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as PiSettingsFile;
@@ -358,18 +387,18 @@ export function loadSettings(host: PiHost): RouterSettings {
         "warn",
         `pi-auggie-router: auggieRouter in .pi/settings.json must be an object, got ${Array.isArray(raw) ? "array" : typeof raw}; using defaults.`
       );
-      return { ...DEFAULT_SETTINGS };
+      return cloneDefaultSettings();
     }
     const validated = validateSettings(
       raw as Record<string, unknown>,
       log as (level: "debug" | "info" | "warn" | "error", msg: string) => void
     );
-    return { ...DEFAULT_SETTINGS, ...validated };
+    return mergeSettings(validated);
   } catch (err) {
     log(
       "warn",
       `pi-auggie-router: failed to parse .pi/settings.json (${(err as Error).message}); using defaults.`
     );
-    return { ...DEFAULT_SETTINGS };
+    return cloneDefaultSettings();
   }
 }

@@ -256,7 +256,7 @@ auggie start
 ### Skill not found
 
 ```
-[System]: Skill "myskill" not found in workspace or home skills directories.
+[System]: Skill "myskill" not found.
 ```
 
 **Fix:** Check that the skill file exists at `.pi/skills/myskill/SKILL.md`.
@@ -272,7 +272,7 @@ auggie start
 /src/utils/auth.ts and src/middleware/auth.ts
 ```
 
-The router will re-run with this clarification appended to the brief.
+Your answer is appended to the brief as a clarification and execution proceeds directly (no Actor/Judge re-run).
 
 ### Sub-agent timeout
 
@@ -285,14 +285,14 @@ The router will re-run with this clarification appended to the brief.
 ### Model not allowed
 
 ```
-[System]: Sub-agent failed: Model "evil/model" uses a disallowed provider.
+[System]: Sub-agent failed: Model "evil/vendor/model" uses a disallowed provider. Allowed prefixes: openrouter
 ```
 
 **Fix:** Configure `allowedProviderPrefixes` in settings:
 ```json
 {
   "auggieRouter": {
-    "allowedProviderPrefixes": ["openrouter", "anthropic"]
+    "allowedProviderPrefixes": ["openrouter"]
   }
 }
 ```

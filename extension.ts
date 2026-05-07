@@ -1,5 +1,5 @@
 /**
- * Extension entry for pi.dev (`@mariozechner/pi-coding-agent`).
+ * Extension entry for pi.dev (`@earendil-works/pi-coding-agent`).
  *
  * Usage (path relative to project root where `pi` is invoked):
  *   pi -e ./node_modules/pi-auggie-router/extension.ts
@@ -10,7 +10,7 @@
  * same convention used by every Pi extension.
  */
 import { createRouter, createExtensionBridge } from "./dist/index.js";
-import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 const VALID_SKILL_NAME = /^[a-zA-Z0-9_-]+$/;
 

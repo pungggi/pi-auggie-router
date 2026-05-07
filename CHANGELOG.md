@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.2] — 2026-05-07
+
+### Changed
+
+- **Extension bridge now uses Pi's `"input"` event** for `onUserInput` and `onBeforeMessage` instead of checking for non-existent methods. This eliminates the three startup warnings (`setInputLocked()`, `onUserInput`, `onBeforeMessage`) and makes the Q&A fallback flow fully functional when running as a pi extension.
+
+### Changed
+
+- **Updated package scope** from `@mariozechner/pi-coding-agent` to `@earendil-works/pi-coding-agent` following the Pi project move to Earendil Works (`0.74.0+`). The old `@mariozechner/*` scope remains as an optional peer dependency for backwards compatibility.
+
 ## [1.2.1] — 2026-05-06
 
 ### Documentation

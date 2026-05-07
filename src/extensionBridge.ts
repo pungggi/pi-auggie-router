@@ -6,8 +6,12 @@
  *
  * Some PiHost methods have degraded behavior when accessed through the bridge:
  * - `getRecentMessages()` returns `[]` (no chat history available from extensions)
- * - `onUserInput()` / `onBeforeMessage()` are limited (extensions use registerCommand instead)
+ * - `setInputLocked()` has no direct equivalent (falls back to sendMessage)
  * - `callLLM()` and `runSubAgent()` use child processes
+ *
+ * Input interception (`onUserInput` / `onBeforeMessage`) is wired through
+ * Pi's `"input"` event, which allows cancelling or handling user input before
+ * it reaches the agent loop.
  */
 
 import { spawn } from "node:child_process";
@@ -210,8 +214,11 @@ async function runSubAgentViaChildProcess(opts: SubAgentRunOptions): Promise<Sub
  *
  * The bridge degrades gracefully where ExtensionAPI lacks direct equivalents:
  * - `getRecentMessages()` returns `[]` (no chat history in extensions)
- * - `onUserInput()` / `onBeforeMessage()` are no-ops with a warning
+ * - `setInputLocked()` falls back to sendMessage (no lock API in extensions)
  * - `callLLM()` and `runSubAgent()` spawn child `pi` processes
+ *
+ * `onUserInput()` and `onBeforeMessage()` are wired through Pi's `"input"`
+ * event system, which fires before the agent loop processes user input.
  *
  * @param pi - The ExtensionAPI instance provided by Pi to extensions
  * @param opts - Optional configuration for logging and capability hints
@@ -226,13 +233,33 @@ export function createExtensionBridge(
 
   // Capability detection
   const hasSendMessage = typeof pi.sendMessage === "function";
-  const hasSetInputLocked = typeof pi.setInputLocked === "function";
+  const hasOn = typeof pi.on === "function";
 
   if (!hasSendMessage) {
     log("warn", "ExtensionAPI.sendMessage() not found — postSystemMessage/postAssistantMessage will log to stderr only.");
   }
-  if (!hasSetInputLocked) {
-    log("warn", "ExtensionAPI.setInputLocked() not found — falling back to sendMessage or stderr for input locking.");
+
+  // --- Input interception via Pi's "input" event ---
+  // onUserInput and onBeforeMessage are both backed by the same event.
+  // The router registers them once during createRouter(); we store the
+  // callbacks and dispatch from a single pi.on("input", ...) handler.
+  let userInputCb: ((raw: string) => { cancel: boolean } | void) | null = null;
+  let beforeMessageCb: ((msg: string) => { cancel: boolean }) | null = null;
+
+  if (hasOn) {
+    pi.on("input", (event: { text: string }) => {
+      // 1. Check userInput interceptor (e.g. /skill: prefix matching)
+      if (userInputCb) {
+        const result = userInputCb(event.text);
+        if (result?.cancel) return { action: "handled" };
+      }
+      // 2. Check beforeMessage interceptor (Q&A fallback capture)
+      if (beforeMessageCb) {
+        const result = beforeMessageCb(event.text);
+        if (result?.cancel) return { action: "handled" };
+      }
+      return { action: "continue" };
+    });
   }
 
   let warnedHistory = false;
@@ -260,16 +287,16 @@ export function createExtensionBridge(
       }
     },
 
-    setInputLocked(locked: boolean, reason?: string) {
-      if (hasSetInputLocked) {
-        pi.setInputLocked(locked, reason);
-      } else if (hasSendMessage) {
+    setInputLocked(_locked: boolean, _reason?: string) {
+      // ExtensionAPI has no direct input-lock method.  Fall back to a
+      // visible system message so the user still sees the state change.
+      if (hasSendMessage) {
         pi.sendMessage({
           role: "system",
-          content: [{ type: "text", text: locked ? "🔒 Input locked" : "🔓 Input unlocked" }],
+          content: [{ type: "text", text: _locked ? "🔒 Input locked" : "🔓 Input unlocked" }],
         });
       } else {
-        log("debug", `Input ${locked ? "locked" : "unlocked"}${reason ? ` (${reason})` : ""}`);
+        log("debug", `Input ${_locked ? "locked" : "unlocked"}${_reason ? ` (${_reason})` : ""}`);
       }
     },
 
@@ -289,14 +316,22 @@ export function createExtensionBridge(
       return runSubAgentViaChildProcess(subOpts);
     },
 
-    onUserInput(_cb) {
-      log("warn", "onUserInput has limited support via extension bridge. /skill: interception may require pi.registerCommand fallback.");
-      return () => {};
+    onUserInput(cb) {
+      if (!hasOn) {
+        log("warn", "ExtensionAPI.on() not found — onUserInput interception unavailable. Use pi.registerCommand fallback.");
+        return () => {};
+      }
+      userInputCb = cb;
+      return () => { userInputCb = null; };
     },
 
-    onBeforeMessage(_cb) {
-      log("warn", "onBeforeMessage is not supported via extension bridge. Q&A fallback will not work.");
-      return () => {};
+    onBeforeMessage(cb) {
+      if (!hasOn) {
+        log("warn", "ExtensionAPI.on() not found — onBeforeMessage interception unavailable. Q&A fallback will not work.");
+        return () => {};
+      }
+      beforeMessageCb = cb;
+      return () => { beforeMessageCb = null; };
     },
 
     resolveWorkspacePath(relative: string): string {

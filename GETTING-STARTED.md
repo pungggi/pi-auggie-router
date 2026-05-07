@@ -1,6 +1,6 @@
 # Getting Started
 
-This guide walks you through your first `/skill` workflow inside the **pi.dev terminal** (`@mariozechner/pi-coding-agent`).
+This guide walks you through your first `/skill` workflow inside the **pi.dev terminal** (`@earendil-works/pi-coding-agent`).
 
 `pi-auggie-router` ships as a pi.dev extension. Install once with `pi install npm:pi-auggie-router` — pi auto-loads it on every launch from there on.
 
@@ -8,7 +8,7 @@ This guide walks you through your first `/skill` workflow inside the **pi.dev te
 
 ## Prerequisites
 
-1. **pi.dev** (`@mariozechner/pi-coding-agent`) installed and on `PATH` (`pi --help` works).
+1. **pi.dev** (`@earendil-works/pi-coding-agent`) installed and on `PATH` (`pi --help` works).
 2. **Augment Code CLI** (`auggie`) installed and authenticated. From any shell:
    ```bash
    auggie status

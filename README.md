@@ -89,6 +89,28 @@ All knobs live under `auggieRouter` in `.pi/settings.json`:
         "balanced": "anthropic/claude-3-5-sonnet",
         "frontier": "anthropic/claude-3-7-sonnet"
       }
+    },
+    "debugPromptPrefixHash": false,
+    "outputSanitizer": {
+      "enabled": true,
+      "finalOutputMaxChars": 120000,
+      "stripToolTraces": true
+    },
+    "contextBudgets": {
+      "enabled": false,
+      "overflowCeilingBytes": {
+        "cheap": 15000,
+        "balanced": 25000,
+        "frontier": 50000
+      }
+    },
+    "historyAssembly": {
+      "strategy": "recent",
+      "headMessages": 2,
+      "tailMessages": 12,
+      "middleMode": "marker",
+      "maxCharsPerMessage": 10000,
+      "maxTotalChars": 60000
     }
   }
 }
@@ -262,6 +284,162 @@ When `allowedProviderPrefixes` is set (e.g. `["openrouter"]`), a fully-qualified
 model whose provider prefix isn't in the list throws `DisallowedProviderError` and
 execution is aborted. This prevents a malicious SKILL.md from routing requests
 to an untrusted provider.
+
+## Final-output sanitization
+
+The router sanitizes the sub-agent's final text before posting it to the main
+thread. This keeps internal tool traces, MCP envelopes, and runaway retrieval
+dumps out of the user's chat history — which also keeps future `historyWindow`
+slices clean.
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `outputSanitizer.enabled` | `true` | Master switch. When `false`, sub-agent output passes through unchanged. |
+| `outputSanitizer.finalOutputMaxChars` | `120000` | Hard cap on final answer characters. The truncation marker counts against the budget. Set to `0` to disable the cap. |
+| `outputSanitizer.stripToolTraces` | `true` | Remove fenced blocks labeled `tool_use`, `tool_result`, `mcp`, `codebase-retrieval`, `auggie`, `scratchpad`, `internal` (and `-`/`_` variants), plus bare `{"jsonrpc":...}` / `{"tool_use_id":...}` / `{"tool_call_id":...}` lines. |
+
+The sanitizer is conservative: legitimate `ts`, `js`, `json`, `py`, `sh`, etc.
+fenced code blocks are preserved. A bare `{"type":...}` JSON line is **not**
+considered a trace (too common in legitimate answers).
+
+When the sanitizer removes or truncates anything, it emits a counts-only log:
+
+```json
+{
+  "event": "auggie-router.output-sanitized",
+  "skill": "refactor",
+  "removedSections": 2,
+  "truncated": false,
+  "originalChars": 18204,
+  "finalChars": 17612
+}
+```
+
+Removed content is **never** logged.
+
+## Context budgets by execution tier
+
+When `contextBudgets.enabled` is `true`, the sub-agent's Auggie overflow ceiling
+is selected from a per-tier pool instead of the static top-level
+`overflowCeilingBytes`. A low-risk read-only task gets a smaller payload window
+than a high-risk architecture refactor. The selected ceiling is sticky for the
+whole sub-agent run.
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `contextBudgets.enabled` | `false` | Master switch. When `false`, the top-level `overflowCeilingBytes` is used as before. |
+| `contextBudgets.overflowCeilingBytes.cheap` | `15000` | Ceiling for read-only / low-complexity work. |
+| `contextBudgets.overflowCeilingBytes.balanced` | `25000` | Ceiling for scoped edits / medium-complexity work. |
+| `contextBudgets.overflowCeilingBytes.frontier` | `50000` | Ceiling for multi-file / architecture / high-risk work. |
+
+**Tier selection rule.** When adaptive execution routing produced the model
+(`selection.source === "execution-routing"`), the model's tier drives the
+budget — the actual runtime tier after preference + safety floors + pool
+fallback. For pinned `SKILL.md model:` runs or legacy fallback, the Judge's
+classification (`route.tier`) is used as the only meaningful signal; with
+adaptive routing disabled this collapses to "balanced" and the budget is
+effectively static.
+
+**Missing tier fallback.** If a tier is omitted from the pool, the router uses
+the top-level `overflowCeilingBytes` instead. A partial pool is intentional —
+no implicit backfill from defaults.
+
+When enabled, every run emits a structured log:
+
+```json
+{
+  "event": "auggie-router.context-budget",
+  "skill": "refactor",
+  "tier": "cheap",
+  "overflowCeilingBytes": 15000,
+  "source": "tier"
+}
+```
+
+`source` is one of `"static"` (disabled), `"tier"` (tier hit a configured
+value), or `"tier-fallback"` (tier missing from pool, used top-level ceiling).
+No prompts, history, or user content are logged.
+
+Note: history/routing-prompt budgets are intentionally NOT tier-driven yet —
+history must be assembled before the Judge knows the tier. See the next
+section for the (separate) history-assembly knob.
+
+## Chat-history assembly
+
+The Actor/Judge loop pulls recent messages via `host.getRecentMessages(historyWindow)`.
+With long sessions, the earliest goal-setting messages can fall out of the
+window — increasing `historyWindow` solves that but bloats every routing call.
+
+`historyAssembly` provides an explicit reducer between `getRecentMessages` and
+brief construction. Two strategies:
+
+| Strategy | Behaviour |
+| --- | --- |
+| `recent` (default) | Pass the host-provided window through unchanged. Legacy behaviour. |
+| `headTail` | Keep the first `headMessages` and last `tailMessages` of the window. Drop the middle or replace it with an explicit marker. Apply per-message and total char caps. |
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `historyAssembly.strategy` | `"recent"` | `"recent"` or `"headTail"`. |
+| `historyAssembly.headMessages` | `2` | Leading messages preserved (only used by `headTail`). |
+| `historyAssembly.tailMessages` | `12` | Trailing messages preserved (only used by `headTail`). |
+| `historyAssembly.middleMode` | `"marker"` | `"marker"` inserts a `[history-omitted-middle: N message(s), ~M chars]` system message; `"omit"` drops the middle silently. |
+| `historyAssembly.maxCharsPerMessage` | `10000` | Per-message char cap. `0` disables. |
+| `historyAssembly.maxTotalChars` | `60000` | Total assembled char cap. `0` disables. |
+
+**Total-cap eviction order** when content exceeds `maxTotalChars`:
+
+1. Any `[history-omitted-middle: …]` marker is dropped first — it's already
+   a placeholder for absent content, so losing it costs nothing real.
+2. Interior messages are dropped from the geometric middle outwards. The
+   first and last entries are preserved as anchors.
+3. If only the two anchors remain and the total still exceeds the cap, the
+   last anchor's content is truncated to fit (including the truncation
+   marker) within the cap.
+
+**Host limitation.** The current `PiHost` API only exposes
+`getRecentMessages(N)`. "Head" therefore means the earliest entries inside
+that window — not necessarily the true start of the session. A future host
+API could surface session-start messages directly.
+
+The router still applies the existing 10 000-char-per-message safety
+truncation inside `buildActorMessages` / `buildJudgeMessages`. If the
+assembler's `maxCharsPerMessage` already cut content, that pass is a no-op.
+
+## Prompt-prefix cache stability
+
+The sub-agent system prompt is built deterministically from the skill
+instructions and an optional appendix only — no dynamic data (selected model,
+execution route, brief, user goal) enters the prefix. This invariant maximizes
+provider prompt-cache hit rate across repeated invocations of the same skill.
+
+Use `buildSubAgentSystemPrompt({ skillInstructions, appendix })` from the public
+API to compute the same prefix in tests or tooling.
+
+For regression detection, enable hash-only debug logging:
+
+```json
+{
+  "auggieRouter": {
+    "debugPromptPrefixHash": true
+  }
+}
+```
+
+When enabled, every sub-agent run emits:
+
+```json
+{
+  "event": "auggie-router.prompt-prefix",
+  "skill": "refactor",
+  "sha256": "…64 hex chars…",
+  "bytes": 12345
+}
+```
+
+Only the SHA-256 hash and byte length are logged — never the prompt text. A
+changing hash across runs of the same skill (with identical appendix) signals
+an accidental cache-busting regression.
 
 ## Execution flow
 

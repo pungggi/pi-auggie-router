@@ -1,3 +1,4 @@
+import { assembleHistory } from "./historyAssembler.js";
 import type {
   ChatMessage,
   ExecutionRoute,
@@ -322,7 +323,8 @@ export async function runActorJudgeLoop(
   settings: RouterSettings,
   skill: ParsedSkill
 ): Promise<JudgeOutcome> {
-  const history = host.getRecentMessages(settings.historyWindow);
+  const rawHistory = host.getRecentMessages(settings.historyWindow);
+  const history = assembleHistory(rawHistory, settings.historyAssembly);
 
   let priorBrief: SkillBrief | null = null;
   let priorRubric: JudgeRubric | null = null;

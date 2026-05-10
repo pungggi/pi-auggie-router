@@ -1,0 +1,53 @@
+{
+  "name": "basic-10-turns",
+  "description": "10 turns of mixed chat, followed by a /skill:docs lookup. Asserts the router still routes a read-only docs lookup to the cheap tier.",
+  "skill": {
+    "name": "docs",
+    "instructions": "Read-only documentation lookup skill. Use codebase-retrieval to find the requested symbol and explain it."
+  },
+  "messages": [
+    { "role": "user", "content": "Hey, I'm onboarding to this repo." },
+    { "role": "assistant", "content": "Welcome! Where would you like to start?" },
+    { "role": "user", "content": "I'm trying to understand the auth flow." },
+    { "role": "assistant", "content": "The auth flow lives in src/auth/." },
+    { "role": "user", "content": "What does the token verifier do?" },
+    { "role": "assistant", "content": "It validates JWTs and checks expiry." },
+    { "role": "user", "content": "Got it. Any caveats?" },
+    { "role": "assistant", "content": "Watch for clock skew on the expiry check." },
+    { "role": "user", "content": "Thanks. One more question." },
+    { "role": "assistant", "content": "Of course." },
+    { "role": "user", "content": "/skill:docs explain the TokenVerifier class" }
+  ],
+  "actorOutputs": [
+    {
+      "userGoal": "Explain the TokenVerifier class in the auth module.",
+      "constraints": ["read-only", "scope: src/auth/"],
+      "knownContext": "Repo has an auth module under src/auth/ that validates JWTs and is sensitive to clock skew."
+    }
+  ],
+  "judgeOutputs": [
+    {
+      "hasUserGoal": true,
+      "hasRequiredInputs": true,
+      "hasScopeBoundary": true,
+      "isUnambiguous": true,
+      "missingRequirementQuestion": null,
+      "executionRoute": {
+        "tier": "cheap",
+        "complexity": "low",
+        "risk": "read_only",
+        "confidence": 0.9,
+        "reason": "Read-only lookup of a documented symbol."
+      }
+    }
+  ],
+  "expected": {
+    "rubricPassed": true,
+    "iterations": 1,
+    "routeTier": "cheap",
+    "minRouteTier": "cheap",
+    "briefGoalKeywords": ["TokenVerifier"],
+    "briefContextKeywords": ["auth"],
+    "minJudgeConfidence": 0.5
+  }
+}

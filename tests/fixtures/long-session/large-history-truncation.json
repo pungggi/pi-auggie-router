@@ -1,0 +1,48 @@
+{
+  "name": "large-history-truncation",
+  "description": "Includes one very large pasted log (>20k chars) earlier in the history. Tests that the routing prompt remains parseable and the route still classifies the actual /skill request, not the noise.",
+  "skill": {
+    "name": "summarize",
+    "instructions": "Read-only summarization skill. Produce a short bulleted summary of the requested symbol or file."
+  },
+  "messages": [
+    { "role": "user", "content": "Here's a log dump I was looking at: $$BIG_LOG$$" },
+    { "role": "assistant", "content": "Looks like an event stream. What do you want to do with it?" },
+    { "role": "user", "content": "Nothing for now. Different question — can you help me with summarization?" },
+    { "role": "assistant", "content": "Sure, what should I summarize?" },
+    { "role": "user", "content": "/skill:summarize give me a 5-bullet summary of src/index.ts" }
+  ],
+  "actorOutputs": [
+    {
+      "userGoal": "Produce a 5-bullet summary of src/index.ts.",
+      "constraints": ["read-only", "<= 5 bullets", "scope: src/index.ts"],
+      "knownContext": "User pasted an unrelated log earlier; that log is not relevant to this skill request."
+    }
+  ],
+  "judgeOutputs": [
+    {
+      "hasUserGoal": true,
+      "hasRequiredInputs": true,
+      "hasScopeBoundary": true,
+      "isUnambiguous": true,
+      "missingRequirementQuestion": null,
+      "executionRoute": {
+        "tier": "cheap",
+        "complexity": "low",
+        "risk": "read_only",
+        "confidence": 0.9,
+        "reason": "Read-only summarization of a single file."
+      }
+    }
+  ],
+  "expected": {
+    "rubricPassed": true,
+    "iterations": 1,
+    "routeTier": "cheap",
+    "minRouteTier": "cheap",
+    "briefGoalKeywords": ["summary", "src/index.ts"],
+    "briefContextKeywords": [],
+    "minJudgeConfidence": 0.5,
+    "expandLargeLogPlaceholder": true
+  }
+}

@@ -1,0 +1,82 @@
+{
+  "name": "ambiguous-qa-20-turns",
+  "description": "20 turns ending in a vague /skill command. Judge must reject the first brief and surface a clarification question. Second Actor/Judge pass succeeds after a (simulated) user clarification.",
+  "skill": {
+    "name": "edit",
+    "instructions": "Small edit skill. Use codebase-retrieval to locate the target, then apply the requested change."
+  },
+  "messages": [
+    { "role": "user", "content": "We have a bug somewhere in the formatting." },
+    { "role": "assistant", "content": "Where in the codebase?" },
+    { "role": "user", "content": "Not sure yet. I'll dig." },
+    { "role": "assistant", "content": "OK." },
+    { "role": "user", "content": "Actually — back to the project plan." },
+    { "role": "assistant", "content": "Sure." },
+    { "role": "user", "content": "We're shipping v1.4 next week." },
+    { "role": "assistant", "content": "Noted." },
+    { "role": "user", "content": "And we need that auth fix in." },
+    { "role": "assistant", "content": "Which auth fix?" },
+    { "role": "user", "content": "The one about clock skew." },
+    { "role": "assistant", "content": "Got it." },
+    { "role": "user", "content": "Random: do you like TypeScript or Go better?" },
+    { "role": "assistant", "content": "No preference — both have their strengths." },
+    { "role": "user", "content": "OK. Anyway." },
+    { "role": "assistant", "content": "Ready when you are." },
+    { "role": "user", "content": "Let's deal with the bug now." },
+    { "role": "assistant", "content": "Which bug?" },
+    { "role": "user", "content": "The formatting one." },
+    { "role": "user", "content": "/skill:edit fix it" }
+  ],
+  "actorOutputs": [
+    {
+      "userGoal": "Fix a formatting bug.",
+      "constraints": [],
+      "knownContext": "User mentioned a formatting bug, location unspecified."
+    },
+    {
+      "userGoal": "Fix the trailing whitespace bug in src/parser.ts.",
+      "constraints": ["small edit", "scope: src/parser.ts"],
+      "knownContext": "User clarified the bug is trailing whitespace in src/parser.ts."
+    }
+  ],
+  "judgeOutputs": [
+    {
+      "hasUserGoal": true,
+      "hasRequiredInputs": false,
+      "hasScopeBoundary": false,
+      "isUnambiguous": false,
+      "missingRequirementQuestion": "Which file or function has the formatting bug?",
+      "executionRoute": {
+        "tier": "balanced",
+        "complexity": "low",
+        "risk": "small_edit",
+        "confidence": 0.4,
+        "reason": "Scope unclear; bumping to balanced."
+      }
+    },
+    {
+      "hasUserGoal": true,
+      "hasRequiredInputs": true,
+      "hasScopeBoundary": true,
+      "isUnambiguous": true,
+      "missingRequirementQuestion": null,
+      "executionRoute": {
+        "tier": "cheap",
+        "complexity": "low",
+        "risk": "small_edit",
+        "confidence": 0.85,
+        "reason": "Small targeted edit in a single file."
+      }
+    }
+  ],
+  "expected": {
+    "rubricPassed": true,
+    "iterations": 2,
+    "routeTier": "cheap",
+    "minRouteTier": "cheap",
+    "briefGoalKeywords": ["src/parser.ts"],
+    "briefContextKeywords": [],
+    "minJudgeConfidence": 0.5,
+    "expectClarificationQuestion": true
+  }
+}

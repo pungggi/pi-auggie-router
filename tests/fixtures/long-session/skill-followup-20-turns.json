@@ -1,0 +1,62 @@
+{
+  "name": "skill-followup-20-turns",
+  "description": "20 turns of chat where the original goal is set early (turn 1) and the /skill command at turn 20 references it implicitly. Tests that brief assembly survives a long irrelevant middle.",
+  "skill": {
+    "name": "refactor",
+    "instructions": "Multi-file refactor skill. Use codebase-retrieval to locate call sites, then propose a stepwise migration."
+  },
+  "messages": [
+    { "role": "user", "content": "I want to rename UserService.findById to UserService.getUser everywhere." },
+    { "role": "assistant", "content": "Sure — we'd need to update all call sites." },
+    { "role": "user", "content": "Before that, can you remind me what TypeScript version we're on?" },
+    { "role": "assistant", "content": "Per package.json: TypeScript 5.8.3." },
+    { "role": "user", "content": "Cool. And the test runner?" },
+    { "role": "assistant", "content": "node:test with tsx." },
+    { "role": "user", "content": "Got it. Random side question: what's the difference between Map and WeakMap?" },
+    { "role": "assistant", "content": "WeakMap keys must be objects and are GC-eligible." },
+    { "role": "user", "content": "Right. OK and how do you feel about gray-matter as a frontmatter parser?" },
+    { "role": "assistant", "content": "It's the de facto choice; we already use it." },
+    { "role": "user", "content": "What about hyperlight YAML?" },
+    { "role": "assistant", "content": "Not familiar with that one." },
+    { "role": "user", "content": "OK never mind. What time is it in Zurich?" },
+    { "role": "assistant", "content": "I don't have a clock." },
+    { "role": "user", "content": "Fair. Back to the work." },
+    { "role": "assistant", "content": "Ready when you are." },
+    { "role": "user", "content": "Let's check how often findById is called first." },
+    { "role": "assistant", "content": "Use the codebase-retrieval tool for that." },
+    { "role": "user", "content": "Right. Let's do this properly." },
+    { "role": "user", "content": "/skill:refactor execute the rename we discussed" }
+  ],
+  "actorOutputs": [
+    {
+      "userGoal": "Rename UserService.findById to UserService.getUser across the codebase.",
+      "constraints": ["multi-file edit", "must update all call sites"],
+      "knownContext": "TypeScript 5.8.3, node:test runner. User wants the rename to propagate to every call site."
+    }
+  ],
+  "judgeOutputs": [
+    {
+      "hasUserGoal": true,
+      "hasRequiredInputs": true,
+      "hasScopeBoundary": true,
+      "isUnambiguous": true,
+      "missingRequirementQuestion": null,
+      "executionRoute": {
+        "tier": "balanced",
+        "complexity": "medium",
+        "risk": "multi_file_edit",
+        "confidence": 0.85,
+        "reason": "Multi-file rename: balanced tier appropriate."
+      }
+    }
+  ],
+  "expected": {
+    "rubricPassed": true,
+    "iterations": 1,
+    "routeTier": "balanced",
+    "minRouteTier": "balanced",
+    "briefGoalKeywords": ["findById", "getUser"],
+    "briefContextKeywords": [],
+    "minJudgeConfidence": 0.5
+  }
+}

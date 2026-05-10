@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import type { ContextMemoryStore } from "./contextMemory.js";
 import type { MCPServerSpec, RouterSettings, ToolResultMiddleware } from "./types.js";
 
 export const AUGGIE_MCP_NAME = "auggie";
@@ -139,23 +140,66 @@ export function buildAuggieMcpSpec(
   };
 }
 
+export interface OverflowMiddlewareOptions {
+  /**
+   * Action 1 — when provided AND the store accepts the payload, the blocked
+   * result is persisted and the replacement message includes a handle plus a
+   * head/tail preview instead of the bare "refine your query" hint.
+   *
+   * If the store rejects (disabled, full, byte cap reached) the legacy
+   * replacement message is returned unchanged so behaviour stays safe.
+   */
+  store?: ContextMemoryStore;
+}
+
+const LEGACY_OVERFLOW_REPLACEMENT =
+  "Result too large. Please refine your codebase-retrieval query to be more specific.";
+
 /**
  * Per PRD §2.5: drop oversized `codebase-retrieval` payloads and return a
  * model-readable hint instead. Other MCP tool calls pass through untouched.
  *
  * The byte-size check uses UTF-8 byte length, not character count, so a
  * payload of multi-byte characters is rejected at the same byte ceiling.
+ *
+ * When `opts.store` is provided, oversized payloads are stashed in the store
+ * (Action 1) and the replacement message points the model at the handle.
  */
-export function makeOverflowMiddleware(maxBytes: number): ToolResultMiddleware {
+export function makeOverflowMiddleware(
+  maxBytes: number,
+  opts: OverflowMiddlewareOptions = {}
+): ToolResultMiddleware {
   return (ctx, raw) => {
     if (ctx.serverName !== AUGGIE_MCP_NAME) return { block: false };
     if (ctx.toolName !== AUGGIE_TOOL_NAME) return { block: false };
     const byteLen = Buffer.byteLength(raw, "utf8");
     if (byteLen <= maxBytes) return { block: false };
+
+    if (opts.store) {
+      const stored = opts.store.store({
+        payload: raw,
+        serverName: ctx.serverName,
+        toolName: ctx.toolName,
+      });
+      if (stored) {
+        const elidedNote =
+          stored.elidedChars > 0
+            ? `\n(Preview elides ~${stored.elidedChars} chars from the middle.)`
+            : "";
+        return {
+          block: true,
+          replacement:
+            `Result too large and was stored as ${stored.id}.\n` +
+            `Size: ${stored.byteLength} bytes.\n` +
+            `Preview:\n${stored.preview}${elidedNote}\n\n` +
+            `Refine your codebase-retrieval query to be more specific instead of relying on the preview.`,
+        };
+      }
+    }
+
     return {
       block: true,
-      replacement:
-        "Result too large. Please refine your codebase-retrieval query to be more specific.",
+      replacement: LEGACY_OVERFLOW_REPLACEMENT,
     };
   };
 }

@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import {
   AUGGIE_DIRECTIVE,
   buildAuggieMcpSpec,
   composeMiddleware,
   makeOverflowMiddleware,
 } from "./auggie.js";
+import { ContextMemoryStore } from "./contextMemory.js";
 import type {
   MCPServerSpec,
   ParsedSkill,
@@ -39,6 +41,43 @@ export interface ExecutionInput {
    * built-in overflow middleware, in the order given.
    */
   additionalToolMiddleware?: ToolResultMiddleware[];
+  /**
+   * Effective Auggie overflow ceiling for this run (Action 4). When omitted,
+   * the static `settings.overflowCeilingBytes` is used. Sticky for the whole
+   * sub-agent lifetime — do not mutate.
+   */
+  overflowCeilingBytes?: number;
+  /**
+   * Action 1 — pre-built context memory store. When provided, the overflow
+   * middleware stashes oversized payloads into it and the caller owns
+   * lifecycle (creation + dispose). When omitted, `executeSkill` creates and
+   * disposes its own store iff `settings.contextMemory.enabled` is true.
+   *
+   * Sharing a store across executeSkill calls (e.g. parallel workers) lets
+   * workers see each other's overflow handles, but it also extends the
+   * data's lifetime — only do this for genuinely co-scoped runs.
+   */
+  contextMemory?: ContextMemoryStore;
+}
+
+/**
+ * Construct the provider-facing system prompt for a sub-agent run.
+ *
+ * Cache-stability invariant: this function depends ONLY on the skill
+ * instructions and the optional appendix. Dynamic per-run data (the brief,
+ * execution route, selected model, user goal) must NOT enter the system
+ * prompt — it goes into `userPrompt` instead. Keeping the prefix
+ * byte-stable across invocations of the same skill maximizes provider
+ * prompt-cache hit rate.
+ */
+export function buildSubAgentSystemPrompt(input: {
+  skillInstructions: string;
+  appendix?: string;
+}): string {
+  const parts: string[] = [input.skillInstructions, AUGGIE_DIRECTIVE];
+  const appendix = input.appendix ?? "";
+  if (appendix !== "") parts.push(appendix);
+  return parts.join("\n\n");
 }
 
 function renderBrief(brief: SkillBrief): string {
@@ -68,33 +107,60 @@ export async function executeSkill(
   const rawAppendix = input.systemPromptAppendix;
   const appendix = typeof rawAppendix === "function" ? rawAppendix() : rawAppendix;
 
-  const promptParts = [
-    input.skill.instructions,
-    "",
-    AUGGIE_DIRECTIVE,
-    appendix ?? "",
-  ].filter(p => p !== "");
-
-  const systemPrompt = promptParts.join("\n\n");
-
-  const middleware = input.additionalToolMiddleware?.length
-    ? composeMiddleware(
-        makeOverflowMiddleware(settings.overflowCeilingBytes),
-        ...input.additionalToolMiddleware,
-      )
-    : makeOverflowMiddleware(settings.overflowCeilingBytes);
-
-  return host.runSubAgent({
-    model: input.resolvedModel,
-    systemPrompt,
-    userPrompt: renderBrief(input.brief),
-    temperature: settings.subAgentTemperature,
-    mcpServers: [
-      buildAuggieMcpSpec(settings),
-      ...(input.additionalMcpServers ?? []),
-    ],
-    toolResultMiddleware: middleware,
-    totalTimeoutMs: settings.totalTimeoutMs,
-    inactivityTimeoutMs: settings.inactivityTimeoutMs,
+  const systemPrompt = buildSubAgentSystemPrompt({
+    skillInstructions: input.skill.instructions,
+    appendix,
   });
+
+  if (settings.debugPromptPrefixHash) {
+    const bytes = Buffer.byteLength(systemPrompt, "utf8");
+    const sha256 = createHash("sha256").update(systemPrompt, "utf8").digest("hex");
+    host.log?.(
+      "debug",
+      JSON.stringify({
+        event: "auggie-router.prompt-prefix",
+        skill: input.skill.name,
+        sha256,
+        bytes,
+      })
+    );
+  }
+
+  const overflowCeiling =
+    typeof input.overflowCeilingBytes === "number" &&
+    input.overflowCeilingBytes > 0
+      ? input.overflowCeilingBytes
+      : settings.overflowCeilingBytes;
+
+  // Action 1 — when contextMemory is enabled and the caller did not pass an
+  // existing store, create and own one for the lifetime of this run.
+  let ownedStore: ContextMemoryStore | undefined;
+  let store = input.contextMemory;
+  if (!store && settings.contextMemory.enabled) {
+    ownedStore = new ContextMemoryStore(settings.contextMemory);
+    store = ownedStore;
+  }
+
+  const overflowMw = makeOverflowMiddleware(overflowCeiling, { store });
+  const middleware = input.additionalToolMiddleware?.length
+    ? composeMiddleware(overflowMw, ...input.additionalToolMiddleware)
+    : overflowMw;
+
+  try {
+    return await host.runSubAgent({
+      model: input.resolvedModel,
+      systemPrompt,
+      userPrompt: renderBrief(input.brief),
+      temperature: settings.subAgentTemperature,
+      mcpServers: [
+        buildAuggieMcpSpec(settings),
+        ...(input.additionalMcpServers ?? []),
+      ],
+      toolResultMiddleware: middleware,
+      totalTimeoutMs: settings.totalTimeoutMs,
+      inactivityTimeoutMs: settings.inactivityTimeoutMs,
+    });
+  } finally {
+    ownedStore?.dispose();
+  }
 }

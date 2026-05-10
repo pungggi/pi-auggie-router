@@ -1,6 +1,7 @@
 import { runActorJudgeLoop } from "./actorJudge.js";
 import { redactSecrets, runAuggieStatus } from "./auggie.js";
 import { loadSettings } from "./config.js";
+import { chooseContextBudget } from "./contextBudget.js";
 import {
   chooseExecutionModel,
   type ExecutionRouteSelection,
@@ -11,6 +12,7 @@ import {
   matchSkillCommand,
   SkillNotFoundError,
 } from "./parser.js";
+import { sanitizeFinalText } from "./outputSanitizer.js";
 import { RouterState } from "./state.js";
 import { executeSkill } from "./subAgent.js";
 import type {
@@ -208,6 +210,27 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
         selection,
       }));
 
+      // Track the tier the model actually runs at when adaptive routing chose
+      // it (selection.tier captures post-preference/safety floors plus pool
+      // fallback). For static / pinned / legacy-fallback paths the selection
+      // tier is the neutral "balanced" sentinel, so use the Judge's
+      // classification instead — that's the only meaningful signal.
+      const budgetTier =
+        selection.source === "execution-routing" ? selection.tier : route.tier;
+      const budget = chooseContextBudget(settings, budgetTier);
+      if (budget.enabled) {
+        log(
+          "info",
+          JSON.stringify({
+            event: "auggie-router.context-budget",
+            skill: skill.name,
+            tier: budget.tier,
+            overflowCeilingBytes: budget.overflowCeilingBytes,
+            source: budget.source,
+          })
+        );
+      }
+
       host.postSystemMessage(formatExecutionMessage({
         skillName: skill.name,
         selection,
@@ -223,8 +246,29 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
           systemPromptAppendix: opts.systemPromptAppendix,
           additionalMcpServers: opts.additionalMcpServers,
           additionalToolMiddleware: opts.additionalToolMiddleware,
+          overflowCeilingBytes: budget.overflowCeilingBytes,
         });
-        host.postAssistantMessage(result.finalText);
+        const sanitized = sanitizeFinalText(
+          result.finalText,
+          settings.outputSanitizer
+        );
+        if (
+          settings.outputSanitizer.enabled &&
+          (sanitized.removedSections > 0 || sanitized.truncated)
+        ) {
+          log(
+            "info",
+            JSON.stringify({
+              event: "auggie-router.output-sanitized",
+              skill: skill.name,
+              removedSections: sanitized.removedSections,
+              truncated: sanitized.truncated,
+              originalChars: sanitized.originalChars,
+              finalChars: sanitized.finalChars,
+            })
+          );
+        }
+        host.postAssistantMessage(sanitized.text);
         if (result.stoppedReason !== "completed") {
           host.postSystemMessage(
             `[System]: Sub-agent stopped early (${result.stoppedReason}).`
@@ -320,7 +364,16 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
   };
 }
 
-export { DEFAULT_EXECUTION_ROUTING, DEFAULT_SETTINGS } from "./config.js";
+export {
+  DEFAULT_CONTEXT_BUDGETS,
+  DEFAULT_EXECUTION_ROUTING,
+  DEFAULT_HISTORY_ASSEMBLY,
+  DEFAULT_OUTPUT_SANITIZER,
+  DEFAULT_SETTINGS,
+} from "./config.js";
+export { chooseContextBudget } from "./contextBudget.js";
+export type { EffectiveContextBudget } from "./contextBudget.js";
+export { assembleHistory } from "./historyAssembler.js";
 export { mapModel, DisallowedProviderError } from "./modelMapper.js";
 export {
   matchSkillCommand,
@@ -331,6 +384,10 @@ export {
   InvalidSkillNameError,
 } from "./parser.js";
 export { composeMiddleware, makeOverflowMiddleware, redactSecrets, runAuggieStatus, AUGGIE_DIRECTIVE, AUGGIE_MCP_NAME, AUGGIE_TOOL_NAME } from "./auggie.js";
+export { buildSubAgentSystemPrompt, executeSkill } from "./subAgent.js";
+export type { ExecutionInput } from "./subAgent.js";
+export { sanitizeFinalText } from "./outputSanitizer.js";
+export type { SanitizeResult } from "./outputSanitizer.js";
 export { createExtensionBridge } from "./extensionBridge.js";
 export type { BridgeOptions } from "./extensionBridge.js";
 export {
@@ -347,14 +404,19 @@ export type {
 export { RouterState } from "./state.js";
 export type {
   ChatMessage,
+  ContextBudgetSettings,
   ExecutionRoute,
   ExecutionRoutingPreference,
   ExecutionRoutingSettings,
   ExecutionRoutingTier,
+  HistoryAssemblySettings,
+  HistoryMiddleMode,
+  HistoryStrategy,
   JudgeRubric,
   LLMCallOptions,
   LLMResponse,
   MCPServerSpec,
+  OutputSanitizerSettings,
   ParsedSkill,
   PiHost,
   RouterSettings,

@@ -767,4 +767,202 @@ describe("createRouter end-to-end", () => {
       h.cleanup();
     }
   });
+
+  // --- output sanitizer integration -----------------------------------------
+
+  it("sanitizes final text and emits output-sanitized log when traces present", async () => {
+    const dirty =
+      "Here's the answer.\n\n```tool_result\n{\"leak\":\"blob\"}\n```\n\nFinal line.";
+    const h = harness({
+      llmResponses: [...PASSING_LLM_PAIR],
+      subAgentResult: { finalText: dirty, stoppedReason: "completed" },
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      const assistant = h.messages.find((m) => m.kind === "assistant");
+      assert.ok(assistant, "expected assistant message");
+      assert.ok(!assistant!.text.includes("leak"), "leaked tool_result content");
+      assert.ok(assistant!.text.includes("Final line."));
+
+      const log = h.logs.find((l) => l.msg.includes("auggie-router.output-sanitized"));
+      assert.ok(log, "expected sanitizer log entry");
+      const data = JSON.parse(log!.msg);
+      assert.equal(data.event, "auggie-router.output-sanitized");
+      assert.equal(data.skill, "demo");
+      assert.equal(data.removedSections, 1);
+      assert.equal(data.truncated, false);
+      assert.ok(data.originalChars > data.finalChars);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("does not emit output-sanitized log for clean answers", async () => {
+    const clean = "Plain answer.\n\n```ts\nconst x = 1;\n```\n\nDone.";
+    const h = harness({
+      llmResponses: [...PASSING_LLM_PAIR],
+      subAgentResult: { finalText: clean, stoppedReason: "completed" },
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      const assistant = h.messages.find((m) => m.kind === "assistant");
+      assert.equal(assistant?.text, clean, "clean answer must pass through unchanged");
+
+      const log = h.logs.find((l) => l.msg.includes("auggie-router.output-sanitized"));
+      assert.equal(log, undefined, "no sanitizer log for clean output");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("respects outputSanitizer.enabled=false", async () => {
+    const dirty = "Pre\n```tool_result\nKEEP\n```\nPost";
+    const h = harness({
+      llmResponses: [...PASSING_LLM_PAIR],
+      subAgentResult: { finalText: dirty, stoppedReason: "completed" },
+      settingsOverride: {
+        outputSanitizer: { enabled: false, finalOutputMaxChars: 0, stripToolTraces: true },
+      },
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      const assistant = h.messages.find((m) => m.kind === "assistant");
+      assert.equal(assistant?.text, dirty, "sanitizer disabled — passthrough");
+      const log = h.logs.find((l) => l.msg.includes("auggie-router.output-sanitized"));
+      assert.equal(log, undefined);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  // --- debugPromptPrefixHash --------------------------------------------------
+
+  it("emits prompt-prefix hash log when debugPromptPrefixHash is enabled", async () => {
+    const h = harness({
+      llmResponses: [...PASSING_LLM_PAIR],
+      settingsOverride: { debugPromptPrefixHash: true },
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      const log = h.logs.find((l) => l.msg.includes("auggie-router.prompt-prefix"));
+      assert.ok(log, "expected prompt-prefix hash log");
+      assert.equal(log!.level, "debug");
+      const data = JSON.parse(log!.msg);
+      assert.equal(data.event, "auggie-router.prompt-prefix");
+      assert.equal(data.skill, "demo");
+      assert.equal(typeof data.sha256, "string");
+      assert.match(data.sha256, /^[a-f0-9]{64}$/);
+      assert.ok(Number.isInteger(data.bytes) && data.bytes > 0);
+      // Hash log must NEVER contain the prompt text itself.
+      assert.ok(!log!.msg.includes("codebase-retrieval"));
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("does not emit prompt-prefix log when debugPromptPrefixHash is disabled", async () => {
+    const h = harness({ llmResponses: [...PASSING_LLM_PAIR] });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      const log = h.logs.find((l) => l.msg.includes("auggie-router.prompt-prefix"));
+      assert.equal(log, undefined);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  // --- Action 4: context budgets by tier ------------------------------------
+
+  it("emits context-budget log and uses cheap-tier ceiling when enabled", async () => {
+    const h = harness({
+      llmResponses: passingPairWithRoute(CHEAP_READ_ONLY_ROUTE),
+      settingsOverride: {
+        ...ADAPTIVE_ROUTING_SETTINGS,
+        overflowCeilingBytes: 25_000,
+        contextBudgets: {
+          enabled: true,
+          overflowCeilingBytes: { cheap: 9_000, balanced: 25_000, frontier: 50_000 },
+        },
+      },
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      const log = h.logs.find((l) => l.msg.includes("auggie-router.context-budget"));
+      assert.ok(log, "expected context-budget log");
+      assert.equal(log!.level, "info");
+      const data = JSON.parse(log!.msg);
+      assert.equal(data.event, "auggie-router.context-budget");
+      assert.equal(data.skill, "demo");
+      assert.equal(data.tier, "cheap");
+      assert.equal(data.overflowCeilingBytes, 9_000);
+      assert.equal(data.source, "tier");
+      // Log must NOT contain raw user content or prompts.
+      assert.ok(!log!.msg.includes("Do it."));
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("does not emit context-budget log when disabled (legacy behaviour)", async () => {
+    const h = harness({
+      llmResponses: passingPairWithRoute(CHEAP_READ_ONLY_ROUTE),
+      settingsOverride: ADAPTIVE_ROUTING_SETTINGS,
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      const log = h.logs.find((l) => l.msg.includes("auggie-router.context-budget"));
+      assert.equal(log, undefined);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("falls back to top-level ceiling when tier value missing", async () => {
+    const h = harness({
+      llmResponses: passingPairWithRoute(CHEAP_READ_ONLY_ROUTE),
+      settingsOverride: {
+        ...ADAPTIVE_ROUTING_SETTINGS,
+        overflowCeilingBytes: 33_000,
+        contextBudgets: {
+          enabled: true,
+          // Intentionally omit `cheap`.
+          overflowCeilingBytes: { balanced: 25_000, frontier: 50_000 },
+        },
+      },
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      const log = h.logs.find((l) => l.msg.includes("auggie-router.context-budget"));
+      assert.ok(log);
+      const data = JSON.parse(log!.msg);
+      assert.equal(data.source, "tier-fallback");
+      assert.equal(data.overflowCeilingBytes, 33_000);
+    } finally {
+      h.cleanup();
+    }
+  });
 });

@@ -15,8 +15,8 @@ export interface PreflightResult {
 }
 
 /**
- * Per PRD §2.5: silent `auggie status` pre-flight. Resolves with `ok=false`
- * if the binary is missing, exits non-zero, or hangs > 5s.
+ * Per PRD §2.5: silent `auggie account status` pre-flight. Resolves with
+ * `ok=false` if the binary is missing, exits non-zero, or hangs > 5s.
  */
 /**
  * Patterns that may indicate secrets/tokens in stderr output.
@@ -67,7 +67,7 @@ export function runAuggieStatus(
 
     let child;
     try {
-      child = spawn(binPath, ["status"], {
+      child = spawn(binPath, ["account", "status"], {
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (err) {
@@ -89,7 +89,7 @@ export function runAuggieStatus(
       } catch {
         /* ignore */
       }
-      finish({ ok: false, detail: "auggie status timed out" });
+      finish({ ok: false, detail: "auggie account status timed out" });
     }, timeoutMs);
 
     child.on("error", (err) => {
@@ -104,7 +104,7 @@ export function runAuggieStatus(
       } else {
         finish({
           ok: false,
-          detail: stderr.trim() || `auggie status exited with code ${code}`,
+          detail: stderr.trim() || `auggie account status exited with code ${code}`,
         });
       }
     });

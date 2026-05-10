@@ -11,9 +11,9 @@ This guide walks you through your first `/skill` workflow inside the **pi.dev te
 1. **pi.dev** (`@earendil-works/pi-coding-agent`) installed and on `PATH` (`pi --help` works).
 2. **Augment Code CLI** (`auggie`) installed and authenticated. From any shell:
    ```bash
-   auggie status
+   auggie account status
    ```
-   Must exit `0` and report `connected`. If not, install from [augmentcode.com](https://www.augmentcode.com/) and run `auggie login`.
+   Must exit `0` and print your credit balance. If not, install from [augmentcode.com](https://www.augmentcode.com/) and run `auggie login`.
 3. **An OpenRouter key** (or whichever provider you point `defaultProvider` at) configured in pi.dev — this is what the routing-class model and sub-agent calls go through.
 
 ## Step 0: Install the extension
@@ -200,7 +200,7 @@ In the pi.dev terminal:
 What happens, in order:
 
 1. Router intercepts `/skill refactor`, loads `.pi/skills/refactor/SKILL.md`.
-2. Pre-flight check: `auggie status` must be green.
+2. Pre-flight check: `auggie account status` must be green.
 3. **Actor/Judge loop** runs against the routing model — turns your one-liner into a structured brief and decides if more context is needed.
 4. **Execution model** is picked: `model:` frontmatter, or adaptive routing if enabled.
 5. A sub-agent spins up with the Augment MCP attached and is forced to call `codebase-retrieval` for context — no raw file dumps.
@@ -264,11 +264,11 @@ If adaptive routing is on with `surfaceDecision: true`, you also see one line li
 In a separate shell:
 
 ```bash
-auggie status
+auggie account status
 auggie login    # if unauthenticated
 ```
 
-Re-run the skill once `auggie status` exits 0.
+Re-run the skill once `auggie account status` exits 0.
 
 ### Skill not found
 

@@ -31,7 +31,7 @@ npm install pi-auggie-router
 ```
 
 Requires Node ≥ 20.6 and a working [Augment Code CLI](https://www.augmentcode.com/)
-(`auggie status` must exit 0).
+(`auggie account status` must exit 0).
 
 ## Mounting it inside a Pi host
 
@@ -277,7 +277,7 @@ to an untrusted provider.
    `missingRequirementQuestion` is posted to the user. The next typed message
    is intercepted via `onBeforeMessage`, appended to the brief as a
    clarification, and execution resumes.
-5. **Auggie pre-flight** — `auggie status` is spawned silently. Any non-zero
+5. **Auggie pre-flight** — `auggie account status` is spawned silently. Any non-zero
    exit aborts with `[System Error]: Cannot execute skill. Augment daemon is
    offline or unauthenticated.`
 6. **Execution model selection** — the router computes the sub-agent model.
@@ -366,7 +366,7 @@ information leakage.
 
 The router spawns the `auggie` binary for pre-flight checks and as an MCP
 server. By default it relies on `$PATH` lookup; set `auggieBinPath` to an
-absolute path to eliminate this attack surface. stderr from `auggie status`
+absolute path to eliminate this attack surface. stderr from `auggie account status`
 is redacted for common secret patterns (API keys, Bearer tokens, hex strings)
 before being surfaced in the UI.
 

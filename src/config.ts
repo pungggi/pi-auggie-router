@@ -34,8 +34,8 @@ export const DEFAULT_CONTEXT_MEMORY: ContextMemorySettings = {
   enabled: false,
   maxEntries: 8,
   maxBytesPerRun: 1_000_000,
-  previewHeadBytes: 4_000,
-  previewTailBytes: 4_000,
+  previewHeadChars: 4_000,
+  previewTailChars: 4_000,
 };
 
 export const DEFAULT_PARALLEL_SUBAGENTS: ParallelSubagentsSettings = {
@@ -587,11 +587,11 @@ function validateContextMemory(
       warnings.push((e as Error).message);
     }
   }
-  if ("previewHeadBytes" in r) {
+  if ("previewHeadChars" in r) {
     try {
-      out.previewHeadBytes = assertInt(
-        r.previewHeadBytes,
-        "contextMemory.previewHeadBytes",
+      out.previewHeadChars = assertInt(
+        r.previewHeadChars,
+        "contextMemory.previewHeadChars",
         0,
         100_000
       );
@@ -599,11 +599,11 @@ function validateContextMemory(
       warnings.push((e as Error).message);
     }
   }
-  if ("previewTailBytes" in r) {
+  if ("previewTailChars" in r) {
     try {
-      out.previewTailBytes = assertInt(
-        r.previewTailBytes,
-        "contextMemory.previewTailBytes",
+      out.previewTailChars = assertInt(
+        r.previewTailChars,
+        "contextMemory.previewTailChars",
         0,
         100_000
       );

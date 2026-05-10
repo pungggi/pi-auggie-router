@@ -71,9 +71,10 @@ function enforceTotalCap(
     total = totalChars(current);
   }
 
-  // 3. Still over (only 1–2 anchors left): truncate the last message's content
-  //    so the final total — including TRUNCATED_MARKER — fits within the cap.
+  // 3. Still over (only 1–2 anchors left): truncate messages so the final
+  //    total — including TRUNCATED_MARKER — fits within the cap.
   if (total > maxTotalChars && current.length > 0) {
+    // 3a. Truncate the last message to fit within the remaining budget.
     const last = current[current.length - 1]!;
     const otherTotal = total - last.content.length;
     const budgetForLast = Math.max(0, maxTotalChars - otherTotal);
@@ -82,6 +83,35 @@ function enforceTotalCap(
       ...last,
       content: last.content.slice(0, sliceLen) + TRUNCATED_MARKER,
     };
+
+    // 3b. Safety check: if a single earlier message already exceeds the cap
+    //     on its own, truncating the last message alone isn't enough. Truncate
+    //     all messages from first to second-to-last so the cap is honored.
+    total = totalChars(current);
+    if (total > maxTotalChars) {
+      for (let i = 0; i < current.length; i++) {
+        const m = current[i]!;
+        if (m.content.length <= maxTotalChars) continue;
+        current[i] = {
+          ...m,
+          content: m.content.slice(0, Math.max(0, maxTotalChars - TRUNCATED_MARKER.length))
+            + TRUNCATED_MARKER,
+        };
+      }
+      // Recompute total after truncating oversized messages.
+      total = totalChars(current);
+      // Last resort: if still over (e.g. marker overhead from multiple msgs),
+      // progressively trim the first message until the cap is met.
+      while (total > maxTotalChars && current.length > 0) {
+        const excess = total - maxTotalChars;
+        const first = current[0]!;
+        const trimmed = first.content.length > excess
+          ? first.content.slice(0, first.content.length - excess)
+          : "";
+        current[0] = { ...first, content: trimmed };
+        total = totalChars(current);
+      }
+    }
   }
   return current;
 }

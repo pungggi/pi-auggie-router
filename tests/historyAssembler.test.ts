@@ -162,4 +162,19 @@ describe("assembleHistory", () => {
     const total = out.reduce((s, m) => s + m.content.length, 0);
     assert.ok(total <= 50, `total=${total}`);
   });
+
+  it("total-cap is honored even when a single message exceeds the cap", () => {
+    const hist: ChatMessage[] = [
+      msg("user", "x".repeat(2000)),
+      msg("user", "y"),
+    ];
+    const out = assembleHistory(hist, {
+      strategy: "recent",
+      maxCharsPerMessage: 0,
+      maxTotalChars: 50,
+    });
+    const total = out.reduce((s, m) => s + m.content.length, 0);
+    assert.ok(total <= 50, `total=${total} must be <= 50`);
+    assert.ok(out.length >= 1, "at least one message preserved");
+  });
 });

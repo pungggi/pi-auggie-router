@@ -82,7 +82,13 @@ export class ContextMemoryStore {
     return { id, byteLength, preview, elidedChars };
   }
 
-  /** Read a bounded slice. Returns null when the id is unknown. */
+  /**
+   * Read a bounded character-slice of a stored payload.
+   * TODO: expose via an in-process `context-memory.read` MCP tool so the
+   * sub-agent can retrieve stored overflow payloads on demand. Currently
+   * unreachable from the execution path — the only surface is the head/tail
+   * preview embedded in the middleware replacement message.
+   */
   read(
     id: string,
     offset: number,
@@ -118,8 +124,13 @@ export class ContextMemoryStore {
   }
 
   private makePreview(payload: string): { preview: string; elidedChars: number } {
-    const head = Math.max(0, this.settings.previewHeadBytes | 0);
-    const tail = Math.max(0, this.settings.previewTailBytes | 0);
+    // Settings are named *Bytes but previews operate on character counts
+    // (UTF-16 code units) for simplicity. Code/JSON payloads are
+    // ASCII-dominant, so bytes ≈ chars in practice. For CJK/emoji-heavy
+    // payloads the preview may be slightly larger than the nominal byte
+    // budget — an acceptable trade-off for the MVP.
+    const head = Math.max(0, this.settings.previewHeadChars | 0);
+    const tail = Math.max(0, this.settings.previewTailChars | 0);
     // If the payload is small enough that head+tail would overlap, just
     // return it whole — no point eliding nothing.
     if (payload.length <= head + tail + PREVIEW_OMITTED_MARKER.length) {

@@ -18,8 +18,8 @@ export interface EffectiveContextBudget {
   overflowCeilingBytes: number;
   /** Tier the budget was selected for (informational; safe to log). */
   tier: ExecutionRoutingTier;
-  /** Whether tier-driven selection actually applied. */
-  enabled: boolean;
+  /** Whether a tier-specific ceiling value was applied. */
+  active: boolean;
   /** Where the ceiling came from. */
   source: "static" | "tier" | "tier-fallback";
 }
@@ -33,7 +33,7 @@ export function chooseContextBudget(
     return {
       overflowCeilingBytes: settings.overflowCeilingBytes,
       tier,
-      enabled: false,
+      active: false,
       source: "static",
     };
   }
@@ -42,14 +42,14 @@ export function chooseContextBudget(
     return {
       overflowCeilingBytes: ceiling,
       tier,
-      enabled: true,
+      active: true,
       source: "tier",
     };
   }
   return {
     overflowCeilingBytes: settings.overflowCeilingBytes,
     tier,
-    enabled: true,
+    active: true,
     source: "tier-fallback",
   };
 }

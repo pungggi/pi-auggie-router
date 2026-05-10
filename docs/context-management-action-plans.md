@@ -161,8 +161,8 @@ Add optional settings under `auggieRouter`, for example:
     "enabled": true,
     "maxEntries": 8,
     "maxBytesPerRun": 1000000,
-    "previewHeadBytes": 4000,
-    "previewTailBytes": 4000
+    "previewHeadChars": 4000,
+    "previewTailChars": 4000
   }
 }
 ```

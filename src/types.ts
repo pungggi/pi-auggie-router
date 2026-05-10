@@ -111,9 +111,9 @@ export interface ContextMemorySettings {
   /** Hard cap on total stored bytes per skill execution. */
   maxBytesPerRun: number;
   /** Head-window chars used in the preview returned to the model. */
-  previewHeadBytes: number;
+  previewHeadChars: number;
   /** Tail-window chars used in the preview returned to the model. */
-  previewTailBytes: number;
+  previewTailChars: number;
 }
 
 /**

@@ -47,6 +47,11 @@ const FENCED_BLOCK = /```([A-Za-z0-9_\-]+)\r?\n[\s\S]*?\r?\n```/g;
  * Conservative: only removes when at start of line and self-contained on
  * the same line. The bare `"type"` key alone is intentionally NOT a trigger
  * (too broad — would match legitimate JSON examples in answers).
+ *
+ * Edge case: lines longer than ~4000 chars are intentionally not matched to
+ * guard against pathological backtracking. Extremely long MCP envelope lines
+ * are uncommon; if they do occur the output will pass through unsanitized
+ * but the truncation cap (`finalOutputMaxChars`) still bounds total size.
  */
 const BARE_MCP_ENVELOPE =
   /^\s*\{"(?:jsonrpc|tool_use_id|tool_call_id)"[^\n]{0,4000}\}\s*$/gm;

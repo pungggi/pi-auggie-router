@@ -218,7 +218,7 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
       const budgetTier =
         selection.source === "execution-routing" ? selection.tier : route.tier;
       const budget = chooseContextBudget(settings, budgetTier);
-      if (budget.enabled) {
+      if (budget.active) {
         log(
           "info",
           JSON.stringify({
@@ -366,9 +366,11 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
 
 export {
   DEFAULT_CONTEXT_BUDGETS,
+  DEFAULT_CONTEXT_MEMORY,
   DEFAULT_EXECUTION_ROUTING,
   DEFAULT_HISTORY_ASSEMBLY,
   DEFAULT_OUTPUT_SANITIZER,
+  DEFAULT_PARALLEL_SUBAGENTS,
   DEFAULT_SETTINGS,
 } from "./config.js";
 export { chooseContextBudget } from "./contextBudget.js";
@@ -384,6 +386,19 @@ export {
   InvalidSkillNameError,
 } from "./parser.js";
 export { composeMiddleware, makeOverflowMiddleware, redactSecrets, runAuggieStatus, AUGGIE_DIRECTIVE, AUGGIE_MCP_NAME, AUGGIE_TOOL_NAME } from "./auggie.js";
+export type { OverflowMiddlewareOptions } from "./auggie.js";
+export { ContextMemoryStore } from "./contextMemory.js";
+export type {
+  ContextMemoryEntry,
+  ContextMemoryStoreResult,
+} from "./contextMemory.js";
+export { runParallelSubagents } from "./parallelSubagents.js";
+export type {
+  ParallelExecutionInput,
+  ParallelExecutionResult,
+  WorkerResult,
+  WorkerStoppedReason,
+} from "./parallelSubagents.js";
 export { buildSubAgentSystemPrompt, executeSkill } from "./subAgent.js";
 export type { ExecutionInput } from "./subAgent.js";
 export { sanitizeFinalText } from "./outputSanitizer.js";
@@ -405,6 +420,7 @@ export { RouterState } from "./state.js";
 export type {
   ChatMessage,
   ContextBudgetSettings,
+  ContextMemorySettings,
   ExecutionRoute,
   ExecutionRoutingPreference,
   ExecutionRoutingSettings,
@@ -417,6 +433,7 @@ export type {
   LLMResponse,
   MCPServerSpec,
   OutputSanitizerSettings,
+  ParallelSubagentsSettings,
   ParsedSkill,
   PiHost,
   RouterSettings,
@@ -424,6 +441,7 @@ export type {
   SkillModelPolicy,
   SubAgentResult,
   SubAgentRunOptions,
+  SubtaskBrief,
   ToolCallContext,
   ToolResultMiddleware,
   UIInputInterceptor,

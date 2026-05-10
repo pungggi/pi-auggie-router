@@ -20,7 +20,7 @@ describe("chooseContextBudget", () => {
     const s = makeSettings({ overflowCeilingBytes: 25_000 });
     const r = chooseContextBudget(s, "cheap");
     assert.equal(r.overflowCeilingBytes, 25_000);
-    assert.equal(r.enabled, false);
+    assert.equal(r.active, false);
     assert.equal(r.source, "static");
     assert.equal(r.tier, "cheap");
   });
@@ -37,7 +37,7 @@ describe("chooseContextBudget", () => {
     assert.equal(r.overflowCeilingBytes, 15_000);
     assert.equal(r.source, "tier");
     assert.equal(r.tier, "cheap");
-    assert.equal(r.enabled, true);
+    assert.equal(r.active, true);
   });
 
   it("returns balanced-tier ceiling when enabled", () => {
@@ -76,6 +76,6 @@ describe("chooseContextBudget", () => {
     assert.equal(r.overflowCeilingBytes, 25_000);
     assert.equal(r.source, "tier-fallback");
     assert.equal(r.tier, "frontier");
-    assert.equal(r.enabled, true);
+    assert.equal(r.active, true);
   });
 });

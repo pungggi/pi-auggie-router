@@ -1,5 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { ContextMemoryStore } from "../src/contextMemory.ts";
 import { DEFAULT_CONTEXT_MEMORY } from "../src/config.ts";
 import type { ContextMemorySettings } from "../src/types.ts";
@@ -154,5 +156,40 @@ describe("ContextMemoryStore", () => {
     assert.equal(meta.byteLength, Buffer.byteLength("secret-data", "utf8"));
     // Make sure we did not surface the payload itself.
     assert.equal((meta as Record<string, unknown>).payload, undefined);
+  });
+
+  it("file-backed mode writes payload and manifest, then deletes temp dir on dispose", () => {
+    const store = new ContextMemoryStore(settingsWith(), true);
+    assert.ok(store.tempDir, "file-backed store exposes tempDir");
+    const tempDir = store.tempDir!;
+    assert.ok(existsSync(tempDir), "temp directory is created");
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(tempDir, "manifest.json"), "utf8")),
+      []
+    );
+
+    const payload = "secret-data";
+    const stored = store.store({
+      payload,
+      serverName: "auggie",
+      toolName: "codebase-retrieval",
+    })!;
+
+    assert.equal(readFileSync(join(tempDir, `${stored.id}.dat`), "utf8"), payload);
+    const manifest = JSON.parse(
+      readFileSync(join(tempDir, "manifest.json"), "utf8")
+    );
+    assert.equal(manifest.length, 1);
+    assert.equal(manifest[0].id, stored.id);
+    assert.equal(manifest[0].byteLength, Buffer.byteLength(payload, "utf8"));
+    assert.equal(manifest[0].payload, undefined);
+
+    store.dispose();
+    assert.equal(existsSync(tempDir), false);
+  });
+
+  it("does not create a temp directory when disabled even if file-backed requested", () => {
+    const store = new ContextMemoryStore({ ...DEFAULT_CONTEXT_MEMORY }, true);
+    assert.equal(store.tempDir, undefined);
   });
 });

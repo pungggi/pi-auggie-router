@@ -385,7 +385,7 @@ export {
   SkillNotFoundError,
   InvalidSkillNameError,
 } from "./parser.js";
-export { composeMiddleware, makeOverflowMiddleware, redactSecrets, runAuggieStatus, AUGGIE_DIRECTIVE, AUGGIE_MCP_NAME, AUGGIE_TOOL_NAME } from "./auggie.js";
+export { composeMiddleware, makeOverflowMiddleware, redactSecrets, runAuggieStatus, AUGGIE_DIRECTIVE, AUGGIE_MCP_NAME, AUGGIE_TOOL_NAME, CONTEXT_MEMORY_MCP_NAME, buildContextMemoryMcpSpec } from "./auggie.js";
 export type { OverflowMiddlewareOptions } from "./auggie.js";
 export { ContextMemoryStore } from "./contextMemory.js";
 export type {

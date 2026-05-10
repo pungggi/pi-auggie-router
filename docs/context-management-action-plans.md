@@ -117,12 +117,11 @@ The preview should be head/tail, not a naive first-only truncation.
 
 ### 3. Add a retrieval surface for the sub-agent
 
-Options:
+Implemented via a tiny stdio MCP server (`context-memory`) that reads from the
+execution-scoped temp directory created by `ContextMemoryStore`. The sub-agent
+can call `context-memory.read` for slices and `context-memory.list` for metadata.
 
-1. **Preferred:** expose a tiny MCP server/tool to the sub-agent, e.g. `context-memory.read`.
-2. **Simpler internal MVP:** add a host-provided tool middleware convention if Pi supports synthetic tools.
-
-The tool should support:
+The read tool supports:
 
 ```json
 {
@@ -132,15 +131,16 @@ The tool should support:
 }
 ```
 
-Potential additional operations:
+Additional operations:
 
-- `list` — show available overflow IDs and metadata.
-- `search` — exact substring search within a stored payload.
-- `read` — offset/limit slicing.
+- `context-memory.list` — show available overflow IDs and metadata.
+- Future: `search` — exact substring search within a stored payload.
 
 ### 4. Cleanup
 
-`executeSkill(...)` should create the memory store before composing middleware and dispose it after `host.runSubAgent(...)` resolves or rejects.
+`executeSkill(...)` creates the memory store before composing middleware, attaches
+the companion `context-memory` MCP server to the sub-agent, and disposes the store
+after `host.runSubAgent(...)` resolves or rejects.
 
 ## Files Likely Touched
 

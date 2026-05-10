@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   AUGGIE_DIRECTIVE,
   buildAuggieMcpSpec,
+  buildContextMemoryMcpSpec,
   composeMiddleware,
   makeOverflowMiddleware,
 } from "./auggie.js";
@@ -134,10 +135,11 @@ export async function executeSkill(
 
   // Action 1 — when contextMemory is enabled and the caller did not pass an
   // existing store, create and own one for the lifetime of this run.
+  // Use file-backed storage so the companion MCP server can serve read/list.
   let ownedStore: ContextMemoryStore | undefined;
   let store = input.contextMemory;
   if (!store && settings.contextMemory.enabled) {
-    ownedStore = new ContextMemoryStore(settings.contextMemory);
+    ownedStore = new ContextMemoryStore(settings.contextMemory, true);
     store = ownedStore;
   }
 
@@ -146,16 +148,24 @@ export async function executeSkill(
     ? composeMiddleware(overflowMw, ...input.additionalToolMiddleware)
     : overflowMw;
 
+  // Build the MCP server list: auggie (always) + context-memory (when store
+  // has file-backed storage) + any caller-provided servers.
+  const contextMemoryMcp = store?.tempDir
+    ? buildContextMemoryMcpSpec(store.tempDir)
+    : undefined;
+  const mcpServers: MCPServerSpec[] = [
+    buildAuggieMcpSpec(settings),
+    ...(contextMemoryMcp ? [contextMemoryMcp] : []),
+    ...(input.additionalMcpServers ?? []),
+  ];
+
   try {
     return await host.runSubAgent({
       model: input.resolvedModel,
       systemPrompt,
       userPrompt: renderBrief(input.brief),
       temperature: settings.subAgentTemperature,
-      mcpServers: [
-        buildAuggieMcpSpec(settings),
-        ...(input.additionalMcpServers ?? []),
-      ],
+      mcpServers,
       toolResultMiddleware: middleware,
       totalTimeoutMs: settings.totalTimeoutMs,
       inactivityTimeoutMs: settings.inactivityTimeoutMs,

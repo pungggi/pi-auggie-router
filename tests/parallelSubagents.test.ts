@@ -1,7 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import {
+  AUGGIE_MCP_NAME,
+  CONTEXT_MEMORY_MCP_NAME,
+} from "../src/auggie.ts";
 import { runParallelSubagents } from "../src/parallelSubagents.ts";
-import { DEFAULT_SETTINGS } from "../src/config.ts";
+import { DEFAULT_CONTEXT_MEMORY, DEFAULT_SETTINGS } from "../src/config.ts";
 import type {
   ParsedSkill,
   PiHost,
@@ -226,6 +230,39 @@ describe("runParallelSubagents", () => {
     const i2 = result.synthesizedText.indexOf("### w2");
     const i3 = result.synthesizedText.indexOf("### w3");
     assert.ok(i1 < i2 && i2 < i3);
+  });
+
+  it("attaches isolated context-memory MCP servers to workers when enabled", async () => {
+    const { host, calls } = makeHost();
+    await runParallelSubagents(
+      host,
+      {
+        ...enableParallel(),
+        contextMemory: { ...DEFAULT_CONTEXT_MEMORY, enabled: true },
+      },
+      {
+        skill: makeSkill(),
+        resolvedModel: "openrouter/x/y",
+        subtasks: briefs.slice(0, 2),
+      }
+    );
+
+    assert.equal(calls.length, 2);
+    const dirs = new Set<string>();
+    for (const call of calls) {
+      assert.deepEqual(
+        call.mcpServers.map((s) => s.name),
+        [AUGGIE_MCP_NAME, CONTEXT_MEMORY_MCP_NAME]
+      );
+      const memorySpec = call.mcpServers.find(
+        (s) => s.name === CONTEXT_MEMORY_MCP_NAME
+      )!;
+      assert.equal(memorySpec.command, process.execPath);
+      assert.match(memorySpec.args?.[0] ?? "", /contextMemoryMcp\.js$/);
+      assert.match(memorySpec.args?.[1] ?? "", /pi-auggie-cm-/);
+      dirs.add(memorySpec.args?.[1] ?? "");
+    }
+    assert.equal(dirs.size, 2, "each worker gets an isolated store dir");
   });
 
   it("system prompt is byte-stable across workers (cache-friendly)", async () => {

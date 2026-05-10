@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { dirname, join } from "node:path";
 import type { ContextMemoryStore } from "./contextMemory.js";
 import type { MCPServerSpec, RouterSettings, ToolResultMiddleware } from "./types.js";
 
@@ -137,6 +138,33 @@ export function buildAuggieMcpSpec(
     name: AUGGIE_MCP_NAME,
     command: settings.auggieBinPath,
     args: ["mcp"],
+  };
+}
+
+export const CONTEXT_MEMORY_MCP_NAME = "context-memory";
+
+/**
+ * Build an MCPServerSpec that spawns the context-memory MCP server.
+ *
+ * The server is a standalone script compiled alongside the rest of the
+ * package. It reads overflow payloads from the temp directory created by
+ * `ContextMemoryStore` and exposes `context-memory.read` / `list` tools
+ * to the sub-agent over the MCP protocol.
+ *
+ * Returns `undefined` when `tempDir` is not set (file-backed storage not
+ * active), so callers can conditionally append the server to the MCP list.
+ */
+export function buildContextMemoryMcpSpec(
+  tempDir: string
+): MCPServerSpec | undefined {
+  // At runtime this file lives at dist/auggie.js, so the MCP server is at
+  // dist/contextMemoryMcp.js. __dirname is available in CJS output (the
+  // compilation target for this package).
+  const scriptPath = join(dirname(__filename), "contextMemoryMcp.js");
+  return {
+    name: CONTEXT_MEMORY_MCP_NAME,
+    command: process.execPath,
+    args: [scriptPath, tempDir],
   };
 }
 

@@ -1,6 +1,7 @@
 node_modules/
 dist/
 *.log
+bash.exe.stackdump
 .DS_Store
 .env
 .env.*

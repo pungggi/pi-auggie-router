@@ -8,16 +8,18 @@
  *
  * Lifetime is bounded to a single sub-agent execution: the host creates a
  * store before `runSubAgent`, the overflow middleware writes into it, and
- * `executeSkill`'s `finally` clause calls `dispose()`. No disk persistence,
- * no cross-run state.
+ * `executeSkill`'s `finally` clause calls `dispose()`. No disk persistence
+ * beyond the temp directory (which `dispose()` deletes).
  *
- * MVP limitation: there is no in-process MCP server exposing a `read` tool to
- * the sub-agent, because Pi's `MCPServerSpec` is stdio-command-only and the
- * store lives in the parent process. Retrieval surface is therefore the
- * head/tail preview embedded in the middleware replacement message. A future
- * extension could add a real `context-memory.read` MCP server.
+ * When file-backed storage is active (`tempDir` provided), payloads are also
+ * written to disk so a companion MCP server process can serve `read` and
+ * `list` tools to the sub-agent.
  */
 
+import { mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ContextMemorySettings } from "./types.js";
 
 export interface ContextMemoryEntry {
@@ -47,7 +49,24 @@ export class ContextMemoryStore {
   private counter = 0;
   private disposed = false;
 
-  constructor(private readonly settings: ContextMemorySettings) {}
+  /**
+   * Absolute path to the temp directory used for file-backed storage.
+   * When set, payloads are written to `<tempDir>/<id>.dat` and a
+   * `manifest.json` is maintained. The companion MCP server reads from
+   * this directory. `undefined` when file-backed storage is not active.
+   */
+  readonly tempDir: string | undefined;
+
+  constructor(
+    private readonly settings: ContextMemorySettings,
+    fileBacked = false
+  ) {
+    if (fileBacked && settings.enabled) {
+      this.tempDir = join(tmpdir(), `pi-auggie-cm-${randomUUID()}`);
+      mkdirSync(this.tempDir, { recursive: true });
+      writeFileSync(join(this.tempDir, "manifest.json"), "[]", "utf8");
+    }
+  }
 
   /**
    * Persist a payload and return its handle, or `null` if storage is
@@ -78,16 +97,33 @@ export class ContextMemoryStore {
     this.entries.set(id, { payload: input.payload, meta });
     this.totalBytes += byteLength;
 
+    // File-backed: write payload to disk and update manifest so the
+    // companion MCP server can serve read/list requests.
+    if (this.tempDir) {
+      try {
+        writeFileSync(join(this.tempDir, `${id}.dat`), input.payload, "utf8");
+        const manifest = this.list();
+        writeFileSync(
+          join(this.tempDir, "manifest.json"),
+          JSON.stringify(manifest),
+          "utf8"
+        );
+      } catch {
+        this.entries.delete(id);
+        this.totalBytes -= byteLength;
+        this.counter--;
+        return null;
+      }
+    }
+
     const { preview, elidedChars } = this.makePreview(input.payload);
     return { id, byteLength, preview, elidedChars };
   }
 
   /**
    * Read a bounded character-slice of a stored payload.
-   * TODO: expose via an in-process `context-memory.read` MCP tool so the
-   * sub-agent can retrieve stored overflow payloads on demand. Currently
-   * unreachable from the execution path — the only surface is the head/tail
-   * preview embedded in the middleware replacement message.
+   * Used both internally (e.g. by tests) and as the backing implementation
+   * for the `context-memory.read` MCP tool served by the companion process.
    */
   read(
     id: string,
@@ -121,14 +157,20 @@ export class ContextMemoryStore {
     this.entries.clear();
     this.totalBytes = 0;
     this.disposed = true;
+    if (this.tempDir) {
+      try {
+        rmSync(this.tempDir, { recursive: true, force: true });
+      } catch {
+        // Best-effort cleanup; OS will reclaim temp files eventually.
+      }
+    }
   }
 
   private makePreview(payload: string): { preview: string; elidedChars: number } {
-    // Settings are named *Bytes but previews operate on character counts
-    // (UTF-16 code units) for simplicity. Code/JSON payloads are
-    // ASCII-dominant, so bytes ≈ chars in practice. For CJK/emoji-heavy
-    // payloads the preview may be slightly larger than the nominal byte
-    // budget — an acceptable trade-off for the MVP.
+    // Previews operate on character counts (UTF-16 code units) for
+    // simplicity. Code/JSON payloads are ASCII-dominant, so bytes ≈ chars in
+    // practice. For CJK/emoji-heavy payloads the preview may be slightly
+    // larger than the nominal byte budget — an acceptable trade-off.
     const head = Math.max(0, this.settings.previewHeadChars | 0);
     const tail = Math.max(0, this.settings.previewTailChars | 0);
     // If the payload is small enough that head+tail would overlap, just

@@ -21,6 +21,7 @@
 import {
   AUGGIE_DIRECTIVE,
   buildAuggieMcpSpec,
+  buildContextMemoryMcpSpec,
   composeMiddleware,
   makeOverflowMiddleware,
 } from "./auggie.js";
@@ -196,7 +197,7 @@ export async function runParallelSubagents(
       typeof brief.maxOutputChars === "number" ? brief.maxOutputChars : defaultCap;
 
     const ownedStore = settings.contextMemory.enabled
-      ? new ContextMemoryStore(settings.contextMemory)
+      ? new ContextMemoryStore(settings.contextMemory, true)
       : undefined;
 
     const overflowMw = makeOverflowMiddleware(overflowCeiling, {
@@ -206,16 +207,22 @@ export async function runParallelSubagents(
       ? composeMiddleware(overflowMw, ...input.additionalToolMiddleware)
       : overflowMw;
 
+    const contextMemoryMcp = ownedStore?.tempDir
+      ? buildContextMemoryMcpSpec(ownedStore.tempDir)
+      : undefined;
+    const mcpServers: MCPServerSpec[] = [
+      buildAuggieMcpSpec(settings),
+      ...(contextMemoryMcp ? [contextMemoryMcp] : []),
+      ...(input.additionalMcpServers ?? []),
+    ];
+
     try {
       const sub = await host.runSubAgent({
         model: input.resolvedModel,
         systemPrompt,
         userPrompt: renderSubtaskUserPrompt(brief),
         temperature: settings.subAgentTemperature,
-        mcpServers: [
-          buildAuggieMcpSpec(settings),
-          ...(input.additionalMcpServers ?? []),
-        ],
+        mcpServers,
         toolResultMiddleware: middleware,
         totalTimeoutMs: settings.totalTimeoutMs,
         inactivityTimeoutMs: settings.inactivityTimeoutMs,

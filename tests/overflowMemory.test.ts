@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   AUGGIE_MCP_NAME,
   AUGGIE_TOOL_NAME,
+  CONTEXT_MEMORY_MCP_NAME,
   makeOverflowMiddleware,
 } from "../src/auggie.ts";
 import { ContextMemoryStore } from "../src/contextMemory.ts";
@@ -152,7 +153,19 @@ describe("executeSkill — context memory lifecycle", () => {
       resolvedModel: "openrouter/x/y",
       overflowCeilingBytes: 50,
     });
-    const mw = calls[0]!.toolResultMiddleware!;
+    const call = calls[0]!;
+    assert.deepEqual(
+      call.mcpServers.map((s) => s.name),
+      [AUGGIE_MCP_NAME, CONTEXT_MEMORY_MCP_NAME]
+    );
+    const memorySpec = call.mcpServers.find(
+      (s) => s.name === CONTEXT_MEMORY_MCP_NAME
+    )!;
+    assert.equal(memorySpec.command, process.execPath);
+    assert.match(memorySpec.args?.[0] ?? "", /contextMemoryMcp\.js$/);
+    assert.match(memorySpec.args?.[1] ?? "", /pi-auggie-cm-/);
+
+    const mw = call.toolResultMiddleware!;
     const result = mw(ctx(), "HEAD_" + "M".repeat(200) + "_TAIL");
     assert.equal(result.block, true);
     if (result.block) {
@@ -186,6 +199,10 @@ describe("executeSkill — context memory lifecycle", () => {
       overflowCeilingBytes: 50,
       contextMemory: store,
     });
+    assert.deepEqual(
+      calls[0]!.mcpServers.map((s) => s.name),
+      [AUGGIE_MCP_NAME]
+    );
     // Store survives the run. Exercising the middleware after `runSubAgent`
     // returned should still be able to write.
     const mw = calls[0]!.toolResultMiddleware!;
@@ -204,6 +221,10 @@ describe("executeSkill — context memory lifecycle", () => {
       resolvedModel: "openrouter/x/y",
       overflowCeilingBytes: 50,
     });
+    assert.deepEqual(
+      calls[0]!.mcpServers.map((s) => s.name),
+      [AUGGIE_MCP_NAME]
+    );
     const mw = calls[0]!.toolResultMiddleware!;
     const result = mw(ctx(), "x".repeat(200));
     assert.equal(result.block, true);

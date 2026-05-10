@@ -102,7 +102,10 @@ export interface PiHost {
  * overflow middleware persists the blocked payload and returns a compact
  * handle (`overflow_<n>`) plus a head/tail preview instead of dropping the
  * data entirely. The store is created before `runSubAgent` and disposed when
- * the sub-agent resolves or rejects — there is no cross-run state.
+ * the sub-agent resolves or rejects. During the run, a companion stdio MCP
+ * server exposes `context-memory.read` and `context-memory.list` against the
+ * execution's temp directory; `dispose()` deletes that directory, so there is
+ * no cross-run state.
  */
 export interface ContextMemorySettings {
   enabled: boolean;

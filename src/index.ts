@@ -6,6 +6,9 @@ import {
   chooseExecutionModel,
   type ExecutionRouteSelection,
 } from "./executionRouter.js";
+import { ExecutionTraceStore } from "./executionTrace.js";
+import type { ExecutionTrace } from "./executionTrace.js";
+import { cleanupTraces } from "./traceCleanup.js";
 import {
   InvalidSkillNameError,
   loadSkill,
@@ -238,6 +241,17 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
       }));
 
       const resolvedModel = selection.model;
+
+      // Create trace store if execution tracing is enabled.
+      const traceStore = settings.executionTrace.enabled
+        ? new ExecutionTraceStore(settings.executionTrace, {
+            skillName: skill.name,
+            model: resolvedModel,
+            brief,
+            route,
+          })
+        : undefined;
+
       try {
         const result = await executeSkill(host, settings, {
           skill,
@@ -247,6 +261,8 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
           additionalMcpServers: opts.additionalMcpServers,
           additionalToolMiddleware: opts.additionalToolMiddleware,
           overflowCeilingBytes: budget.overflowCeilingBytes,
+          traceStore: traceStore ?? undefined,
+          route,
         });
         const sanitized = sanitizeFinalText(
           result.finalText,
@@ -273,6 +289,39 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
           host.postSystemMessage(
             `[System]: Sub-agent stopped early (${result.stoppedReason}).`
           );
+        }
+
+        // Finalize and persist execution trace.
+        if (traceStore && !traceStore.finalized) {
+          try {
+            const trace = traceStore.finalize(
+              sanitized.text,
+              result.stoppedReason
+            );
+            const workspaceRoot = host.resolveWorkspacePath(".");
+            const filepath = traceStore.persist(trace, workspaceRoot);
+            log(
+              "info",
+              JSON.stringify({
+                event: "auggie-router.execution-trace",
+                skill: skill.name,
+                toolCalls: trace.toolCalls.length,
+                stoppedReason: trace.stoppedReason,
+                filepath,
+              })
+            );
+
+            // TTL-based cleanup of old traces.
+            const traceDir = host.resolveWorkspacePath(settings.executionTrace.traceDirectory);
+            const deleted = cleanupTraces(traceDir);
+            if (deleted > 0) {
+              log("debug", `pi-auggie-router: cleaned up ${deleted} old trace file(s)`);
+            }
+          } catch (traceErr) {
+            log("warn", `pi-auggie-router: trace persist failed: ${(traceErr as Error).message}`);
+          } finally {
+            traceStore.dispose();
+          }
         }
       } catch (err) {
         host.postSystemMessage(
@@ -405,6 +454,8 @@ export type {
   ExecutionTraceStoreSettings,
   ToolCallEntry,
 } from "./executionTrace.js";
+export { cleanupTraces } from "./traceCleanup.js";
+export type { TraceCleanupOptions } from "./traceCleanup.js";
 export { buildSubAgentSystemPrompt, executeSkill } from "./subAgent.js";
 export type { ExecutionInput } from "./subAgent.js";
 export { sanitizeFinalText } from "./outputSanitizer.js";

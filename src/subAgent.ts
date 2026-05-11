@@ -7,7 +7,9 @@ import {
   makeOverflowMiddleware,
 } from "./auggie.js";
 import { ContextMemoryStore } from "./contextMemory.js";
+import { type ExecutionTraceStore, makeTraceMiddleware } from "./executionTrace.js";
 import type {
+  ExecutionRoute,
   MCPServerSpec,
   ParsedSkill,
   PiHost,
@@ -59,6 +61,19 @@ export interface ExecutionInput {
    * data's lifetime — only do this for genuinely co-scoped runs.
    */
   contextMemory?: ContextMemoryStore;
+  /**
+   * Execution trace store for harness self-evolution. When provided,
+   * `executeSkill` composes `makeTraceMiddleware(store)` before the
+   * overflow middleware so every tool call is recorded.
+   * The caller owns lifecycle: create before execution, finalize + persist
+   * after.
+   */
+  traceStore?: ExecutionTraceStore;
+  /**
+   * Execution route from the Judge, forwarded to the trace store metadata.
+   * Optional — only used when `traceStore` is provided.
+   */
+  route?: ExecutionRoute;
 }
 
 /**
@@ -151,10 +166,19 @@ export async function executeSkill(
     store = ownedStore;
   }
 
+  // Trace middleware (non-blocking observer) — composed BEFORE overflow
+  // middleware so it sees the raw payload before potential replacement.
+  const traceMw = input.traceStore ? makeTraceMiddleware(input.traceStore) : null;
+
   const overflowMw = makeOverflowMiddleware(overflowCeiling, { store });
-  const middleware = input.additionalToolMiddleware?.length
-    ? composeMiddleware(overflowMw, ...input.additionalToolMiddleware)
-    : overflowMw;
+  const middleware = [
+    traceMw,
+    overflowMw,
+    ...(input.additionalToolMiddleware ?? []),
+  ].filter(<T>(x: T | null): x is T => x !== null);
+  const composed = middleware.length === 1
+    ? middleware[0]!
+    : composeMiddleware(...middleware);
 
   // Build the MCP server list: auggie (always) + context-memory (when store
   // has file-backed storage) + any caller-provided servers.
@@ -174,7 +198,7 @@ export async function executeSkill(
       userPrompt: renderBrief(input.brief),
       temperature: settings.subAgentTemperature,
       mcpServers,
-      toolResultMiddleware: middleware,
+      toolResultMiddleware: composed,
       totalTimeoutMs: settings.totalTimeoutMs,
       inactivityTimeoutMs: settings.inactivityTimeoutMs,
     });

@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] — 2026-05-11
+
+### Added
+
+- **Execution trace store** for harness self-evolution — `ExecutionTraceStore` captures every tool call (server, tool, args, result preview, blocked flag, timestamp) during sub-agent execution and persists full traces as JSON to `.pi/traces/<skillName>_<timestamp>.json`. Enabled by default via `executionTrace` settings. See `docs/PRD-harness-self-evolution.md` for the self-improvement roadmap.
+
+- **`makeTraceMiddleware`** — a non-blocking observer middleware that records tool calls into an `ExecutionTraceStore` without affecting execution flow. Composed before the overflow middleware so raw payloads are captured pre-replacement.
+
+- **TTL-based trace cleanup** (`cleanupTraces`) — automatically prunes trace files older than 7 days or exceeding a 500-file cap after each persist. Configurable via `TraceCleanupOptions`.
+
+- **Skip-Judge mode** — setting `maxJudgeIterations: 0` now runs the Actor only (no Judge), produces a brief, and auto-passes. Useful for simple or well-known skills where verification overhead is unnecessary. Config validation floor lowered from 1 to 0.
+
+- **Trace lifecycle wiring** — the router creates an `ExecutionTraceStore` before each execution, composes the trace middleware, and finalizes + persists the trace after sub-agent completion. Emits structured `auggie-router.execution-trace` log events with tool-call count and filepath.
+
+- **Harness self-evolution PRD** (`docs/PRD-harness-self-evolution.md`) — detailed 5-phase roadmap from trace collection to automatic SKILL.md improvement, inspired by Stanford/Tsinghua research on harness engineering.
+
+- New public exports: `ExecutionTraceStore`, `makeTraceMiddleware`, `ExecutionTrace`, `ExecutionTraceStoreSettings`, `ToolCallEntry`, `cleanupTraces`, `TraceCleanupOptions`.
+
+- New config field: `executionTrace` in `RouterSettings` with `enabled`, `maxResultPreviewChars`, and `traceDirectory`.
+
+### Changed
+
+- **`AUGGIE_DIRECTIVE` slimmed** from 2 sentences to 1 (`"Use the \`codebase-retrieval\` MCP tool for workspace context."`). Drops the negative instruction — modern models don't need the hand-holding, and the subtraction reduces per-run token cost.
+
+- **`renderBrief()` knownContext budget** — the free-form `knownContext` field from the Actor is now capped at 500 characters to prevent context bloat from cheap routing models.
+
+- `ExecutionInput` in `subAgent.ts` accepts optional `traceStore` and `route` fields for trace capture.
+
+- `JudgeOutcome.iterations` doc updated: 0 means Judge skipped, 1+ means full loop.
+
 ## [1.3.0] — 2026-05-11
 
 ### Added

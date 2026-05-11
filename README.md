@@ -123,6 +123,11 @@ All knobs live under `auggieRouter` in `.pi/settings.json`:
       "enabled": false,
       "maxSubagents": 3,
       "perWorkerOutputCharCap": 8000
+    },
+    "executionTrace": {
+      "enabled": true,
+      "maxResultPreviewChars": 2000,
+      "traceDirectory": ".pi/traces"
     }
   }
 }
@@ -504,6 +509,46 @@ needed to combine results.
 | `parallelSubagents.maxSubagents` | `3` | Maximum concurrent workers allowed by settings. Caller overrides are bounded by this cap. |
 | `parallelSubagents.perWorkerOutputCharCap` | `8000` | Default cap for each worker's final text. `0` disables the cap. |
 
+## Execution trace persistence
+
+When `executionTrace.enabled` is `true` (the default), the router captures a
+full transcript of every sub-agent execution and persists it to
+`.pi/traces/<skillName>_<timestamp>.json`. Each trace contains:
+
+- **Skill metadata**: name, model, brief, execution route
+- **Tool calls**: server name, tool name, args, result preview (capped at
+  `maxResultPreviewChars`), blocked flag, timestamp
+- **Outcome**: final text and stopped reason
+
+This data powers future harness self-evolution (see
+[`docs/PRD-harness-self-evolution.md`](docs/PRD-harness-self-evolution.md)):
+reading raw failed traces to propose SKILL.md improvements.
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `executionTrace.enabled` | `true` | Master switch for trace capture and persistence. |
+| `executionTrace.maxResultPreviewChars` | `2000` | Max characters kept from each tool result in the trace. Full payloads are not stored (could be megabytes of codebase content). |
+| `executionTrace.traceDirectory` | `".pi/traces"` | Directory (relative to workspace root) where trace JSON files are stored. |
+
+Old traces are automatically cleaned up after each run. Files older than
+7 days are deleted, and the total count is capped at 500 (oldest first).
+Use `cleanupTraces(dir, opts)` from the public API to trigger cleanup manually.
+
+### Skip-Judge mode
+
+Setting `maxJudgeIterations` to `0` skips the Judge entirely. The Actor
+produces a brief, the rubric auto-passes, and the default execution route
+is used. This eliminates the verification overhead for simple or
+well-known skills:
+
+```json
+{
+  "auggieRouter": {
+    "maxJudgeIterations": 0
+  }
+}
+```
+
 ## Execution flow
 
 1. **Intercept** — `onUserInput` matches `^/skill:([a-zA-Z0-9_-]+)`, swallows
@@ -513,7 +558,8 @@ needed to combine results.
    `gray-matter`; only `model:` is honoured.
 3. **2-pass Actor/Judge loop** — drafts a `{userGoal, constraints, knownContext}`
    brief, scores it against a binary rubric, rewrites once if any boolean is
-   `false`. Hard cap = 2 passes.
+   `false`. Hard cap = 2 passes. When `maxJudgeIterations=0`, the Judge is
+   skipped entirely (Actor only, auto-pass).
 4. **Q&A fallback** — if the second pass still fails, the Judge's
    `missingRequirementQuestion` is posted to the user. The next typed message
    is intercepted via `onBeforeMessage`, appended to the brief as a
@@ -533,9 +579,10 @@ needed to combine results.
 8. **Sub-agent execution** — the input editor is locked, a `[System]: ⚙️ Executing …`
    marker is posted, and an isolated Pi sub-agent runs at `temperature: 0.0`
    with the `auggie` MCP attached over stdio. If `contextMemory.enabled=true`,
-   the execution-scoped `context-memory` MCP is attached too. The sub-agent's
-   prompt is appended with: *"To gather context, you MUST strictly use the MCP
-   tool named `codebase-retrieval`. Do not attempt to run auggie in the terminal."*
+   the execution-scoped `context-memory` MCP is attached too. If
+   `executionTrace.enabled=true`, a trace middleware captures every tool call.
+   The sub-agent's prompt is appended with the `AUGGIE_DIRECTIVE`:
+   *"Use the `codebase-retrieval` MCP tool for workspace context."*
    Structured route, context-budget, and optional prompt-prefix logs are emitted
    at this point.
 9. **Overflow middleware** — every oversized `auggie/codebase-retrieval` response
@@ -544,8 +591,12 @@ needed to combine results.
    With context memory enabled, the payload is stored execution-locally and the
    replacement includes an overflow handle plus bounded preview.
 10. **Resolution** — final sub-agent text is sanitized according to
-   `outputSanitizer`, posted to the main thread, the editor is unlocked, and the
-   state machine resets to `idle`.
+    `outputSanitizer`, posted to the main thread, the editor is unlocked, and the
+    state machine resets to `idle`.
+11. **Trace persistence** — if `executionTrace.enabled`, the trace store is
+    finalized with the sub-agent's output and persisted to `.pi/traces/`. Old
+    traces are cleaned up (7-day TTL, 500-file cap). A structured
+    `auggie-router.execution-trace` log event is emitted.
 
 ## State machine
 

@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] — 2026-05-11
+
+### Added
+
+- **Context-management controls** for cleaner long-running skill workflows:
+  - `historyAssembly` with opt-in `headTail` assembly, explicit middle omission markers, and per-message/total character caps for Actor/Judge history.
+  - `contextBudgets` with optional per-tier Auggie overflow ceilings (`cheap`, `balanced`, `frontier`) derived from the effective execution route.
+  - `debugPromptPrefixHash`, an opt-in SHA-256/byte-count log for detecting prompt-cache regressions without logging prompt text.
+
+- **Execution-scoped overflow context memory** — optional `contextMemory` support stores oversized Auggie `codebase-retrieval` payloads in a per-run temp store and returns compact overflow handles with bounded head/tail previews. When enabled, the sub-agent receives a companion `context-memory` MCP server exposing `context-memory.read` and `context-memory.list`; cleanup runs after execution.
+
+- **Final-output sanitizer** — enabled by default via `outputSanitizer`. It strips clearly marked tool/MCP traces, preserves normal code fences, caps runaway final answers, and emits counts-only `auggie-router.output-sanitized` logs when it changes output.
+
+- **Parallel sub-agent runner API** — `runParallelSubagents(...)` plus related public types. The feature is disabled by default and requires explicit subtasks; each worker gets isolated prompt/MCP/context-memory plumbing, capped output, bounded concurrency, and deterministic synthesis.
+
+- **Long-session regression fixtures** covering 10+ and 20+ turn conversations, ambiguous Q&A, and large-history truncation behavior.
+
+- New public exports: `assembleHistory`, `chooseContextBudget`, `EffectiveContextBudget`, `ContextMemoryStore`, `ContextMemoryEntry`, `ContextMemoryStoreResult`, `runParallelSubagents`, parallel worker/result types, `buildSubAgentSystemPrompt`, `sanitizeFinalText`, `SanitizeResult`, and new default setting constants for context budgets, context memory, history assembly, output sanitization, and parallel subagents.
+
+### Changed
+
+- README configuration and feature docs now cover output sanitization, context budgets, history assembly, prompt-prefix cache stability, and the updated execution flow.
+- `DEFAULT_SETTINGS` now includes `outputSanitizer`, `contextBudgets`, `historyAssembly`, `contextMemory`, `parallelSubagents`, and `debugPromptPrefixHash` defaults. Existing runtime behavior remains backward compatible unless opt-in switches are enabled, except conservative final-output sanitization which is on by default.
+- Sub-agent overflow handling can now receive an execution-scoped effective ceiling while preserving the legacy static `overflowCeilingBytes` path when context budgets are disabled.
+
+### Fixed
+
+- `package-lock.json` version metadata now matches the package version for the 1.3.0 release.
+
 ## [1.2.3] — 2026-05-10
 
 ### Fixed

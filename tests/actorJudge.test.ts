@@ -293,4 +293,29 @@ describe("runActorJudgeLoop", () => {
     assert.equal(out.passed, true);
     assert.equal(out.brief.userGoal, "g");
   });
+
+   it("skips Judge and auto-passes when maxJudgeIterations is 0", async () => {
+    const { host, calls } = makeHost([
+      JSON.stringify({
+        userGoal: "Run a simple query",
+        constraints: [],
+        knownContext: "",
+      }),
+    ]);
+    const settings = { ...DEFAULT_SETTINGS, maxJudgeIterations: 0 };
+    const out = await runActorJudgeLoop(host, settings, SKILL);
+
+    assert.equal(out.passed, true);
+    assert.equal(out.iterations, 0);
+    assert.equal(out.brief.userGoal, "Run a simple query");
+    assert.deepEqual(out.rubric, {
+      hasUserGoal: true,
+      hasRequiredInputs: true,
+      hasScopeBoundary: true,
+      isUnambiguous: true,
+    });
+    assert.deepEqual(out.route, { ...DEFAULT_EXECUTION_ROUTE });
+    // Only the Actor call — no Judge call.
+    assert.equal(calls.length, 1);
+  });
 });

@@ -1,7 +1,8 @@
 # PRD: Adaptive Execution Model Routing for `pi-auggie-router`
 
-**Status:** Draft  
+**Status:** Implemented in v1.1.0; retained as historical PRD
 **Date:** 2026-05-05  
+**Last updated:** 2026-05-11
 **Owner:** TBD  
 **Package:** `pi-auggie-router`
 

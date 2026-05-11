@@ -100,7 +100,7 @@ export interface JudgeOutcome {
   rubric: JudgeRubric;
   /** True iff every required boolean passed. */
   passed: boolean;
-  /** Number of Actor passes performed (1 or 2). */
+  /** Number of Actor passes performed (0 = Judge skipped, 1+ = full loop). */
   iterations: number;
   /**
    * Routing metadata produced by the Judge alongside the rubric.
@@ -317,6 +317,11 @@ async function callWithTimeout(
 /**
  * Run the 2-pass Actor/Judge loop. Returns the final brief + judge verdict.
  * Caller decides what to do when `passed === false` (typically: trigger Q&A).
+ *
+ * When `maxJudgeIterations` is 0 the Judge is skipped entirely: the Actor
+ * produces a brief, the rubric is synthesised as a full pass, and the
+ * default execution route is used. This lets callers opt out of the
+ * verification overhead for simple or well-known skills.
  */
 export async function runActorJudgeLoop(
   host: PiHost,
@@ -325,6 +330,45 @@ export async function runActorJudgeLoop(
 ): Promise<JudgeOutcome> {
   const rawHistory = host.getRecentMessages(settings.historyWindow);
   const history = assembleHistory(rawHistory, settings.historyAssembly);
+
+  // maxJudgeIterations === 0 ⟹ skip Judge, run Actor only, auto-pass.
+  if (settings.maxJudgeIterations <= 0) {
+    const actorRes = await callWithTimeout(
+      host,
+      {
+        model: settings.routingModel,
+        messages: buildActorMessages(skill, history, null, null),
+        temperature: 0.0,
+        responseFormat: "json",
+      },
+      settings.routingTimeoutMs
+    );
+
+    let brief: SkillBrief;
+    try {
+      brief = coerceBrief(extractJson(actorRes.text));
+    } catch {
+      brief = {
+        userGoal: "",
+        constraints: [],
+        knownContext: "",
+        userClarifications: [],
+      };
+    }
+
+    return {
+      brief,
+      rubric: {
+        hasUserGoal: true,
+        hasRequiredInputs: true,
+        hasScopeBoundary: true,
+        isUnambiguous: true,
+      },
+      passed: true,
+      iterations: 0,
+      route: { ...DEFAULT_EXECUTION_ROUTE },
+    };
+  }
 
   let priorBrief: SkillBrief | null = null;
   let priorRubric: JudgeRubric | null = null;

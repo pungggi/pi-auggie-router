@@ -3,8 +3,8 @@
 **Source PRD:** [`docs/PRD-adaptive-execution-model-routing.md`](./PRD-adaptive-execution-model-routing.md)  
 **Package:** `pi-auggie-router`  
 **Status owner:** TBD  
-**Last updated:** 2026-05-05  
-**Overall status:** MVP complete — v1.1.0 ready for publish. Phase 6 (route memory) deferred.
+**Last updated:** 2026-05-11
+**Overall status:** Adaptive execution routing MVP complete and shipped in the 1.x line. v1.3.0 adds the separate context-management MVPs tracked in [`docs/context-management-action-plans.md`](./context-management-action-plans.md). Phase 6 (same-skill route memory) remains deferred.
 
 ## 1. Status legend
 
@@ -28,7 +28,7 @@
 | 5 | Observability | `[x]` | Structured route logs via `host.log`; optional `surfaceDecision` system message. |
 | 6 | Optional cache-aware route memory | `[d]` | Deferred until logs prove same-skill model churn matters. |
 | 7 | README/docs update | `[x]` | README updated with adaptive routing section, config, policies, safety floors, observability. |
-| 8 | Release readiness | `[x]` | v1.1.0 minor bump. CHANGELOG, lint/build/test, exports all confirmed. |
+| 8 | Release readiness | `[x]` | Released as v1.1.0; package is now at v1.3.0 with later context-management/docs cleanup. CHANGELOG, lint/build/test, exports all confirmed. |
 
 ## 3. Phase checklist
 
@@ -443,6 +443,7 @@ Relevant current files:
 | 2026-05-05 | Phase 7 landed: README/docs update | AI assistant | Added adaptive routing section, config table, preference/safety/policy docs, execution flow update, migration note. |
 | 2026-05-05 | Addressed Phase 7 review fixes | AI assistant | Reduced duplicate config, clarified surfaceDecision/fallback/minimum-tier behavior, refreshed implementation notes and dist policy. |
 | 2026-05-05 | Phase 8: release readiness | AI assistant | v1.1.0 minor bump. CHANGELOG.md created. All acceptance criteria met. |
+| 2026-05-11 | v1.3.0 docs/status cleanup | AI assistant | Added 1.3.0 changelog entry, refreshed context-management plan status, and clarified this PRD status is historical for adaptive routing. |
 | 2026-05-05 | Addressed Phase 8 review fixes | AI assistant | Updated package-lock version, removed broken packaged PRD link, completed DoD checklist, refreshed relevant files. |
 | 2026-05-05 | Security hardening review fixes | AI assistant | Enforced provider allowlist on final mapped models; hardened extension bridge temp files/stdout/stderr; added capped output helper/tests. |
 

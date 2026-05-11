@@ -7,8 +7,7 @@ export const AUGGIE_MCP_NAME = "auggie";
 export const AUGGIE_TOOL_NAME = "codebase-retrieval";
 
 export const AUGGIE_DIRECTIVE =
-  "To gather context, you MUST strictly use the MCP tool named " +
-  "`codebase-retrieval`. Do not attempt to run auggie in the terminal.";
+  "Use the `codebase-retrieval` MCP tool for workspace context.";
 
 export interface PreflightResult {
   ok: boolean;

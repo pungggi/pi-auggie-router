@@ -88,7 +88,7 @@ describe("buildAuggieMcpSpec", () => {
 describe("AUGGIE_DIRECTIVE", () => {
   it("instructs the sub-agent to use codebase-retrieval", () => {
     assert.match(AUGGIE_DIRECTIVE, /codebase-retrieval/);
-    assert.match(AUGGIE_DIRECTIVE, /Do not attempt to run auggie in the terminal/);
+    assert.match(AUGGIE_DIRECTIVE, /MCP tool/);
   });
 });
 

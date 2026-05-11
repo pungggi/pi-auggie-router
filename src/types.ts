@@ -203,6 +203,14 @@ export interface HistoryAssemblySettings {
   maxTotalChars: number;
 }
 
+export interface ExecutionTraceSettings {
+  enabled: boolean;
+  /** Maximum characters kept from each tool result for the trace preview. */
+  maxResultPreviewChars: number;
+  /** Directory (relative to workspace root) where trace JSON files are stored. */
+  traceDirectory: string;
+}
+
 export interface RouterSettings {
   /** LLM gateway prefix; e.g. `openrouter`. */
   defaultProvider: string;
@@ -254,6 +262,8 @@ export interface RouterSettings {
   contextMemory: ContextMemorySettings;
   /** Action 6 — parallel independent sub-agents. Disabled by default. */
   parallelSubagents: ParallelSubagentsSettings;
+  /** Execution trace persistence for harness self-evolution. Enabled by default. */
+  executionTrace: ExecutionTraceSettings;
 }
 
 export type ExecutionRoutingPreference =

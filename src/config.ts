@@ -5,6 +5,7 @@ import type {
   ExecutionRoutingPreference,
   ExecutionRoutingSettings,
   ExecutionRoutingTier,
+  ExecutionTraceSettings,
   HistoryAssemblySettings,
   HistoryMiddleMode,
   HistoryStrategy,
@@ -36,6 +37,12 @@ export const DEFAULT_CONTEXT_MEMORY: ContextMemorySettings = {
   maxBytesPerRun: 1_000_000,
   previewHeadChars: 4_000,
   previewTailChars: 4_000,
+};
+
+export const DEFAULT_EXECUTION_TRACE: ExecutionTraceSettings = {
+  enabled: true,
+  maxResultPreviewChars: 2_000,
+  traceDirectory: ".pi/traces",
 };
 
 export const DEFAULT_PARALLEL_SUBAGENTS: ParallelSubagentsSettings = {
@@ -85,6 +92,7 @@ export const DEFAULT_SETTINGS: RouterSettings = {
   historyAssembly: DEFAULT_HISTORY_ASSEMBLY,
   contextMemory: DEFAULT_CONTEXT_MEMORY,
   parallelSubagents: DEFAULT_PARALLEL_SUBAGENTS,
+  executionTrace: DEFAULT_EXECUTION_TRACE,
 };
 
 function cloneExecutionRouting(
@@ -129,6 +137,12 @@ function cloneParallelSubagents(
   return { ...s };
 }
 
+function cloneExecutionTrace(
+  s: ExecutionTraceSettings = DEFAULT_EXECUTION_TRACE
+): ExecutionTraceSettings {
+  return { ...s };
+}
+
 function cloneDefaultSettings(): RouterSettings {
   return {
     ...DEFAULT_SETTINGS,
@@ -139,6 +153,7 @@ function cloneDefaultSettings(): RouterSettings {
     historyAssembly: cloneHistoryAssembly(),
     contextMemory: cloneContextMemory(),
     parallelSubagents: cloneParallelSubagents(),
+    executionTrace: cloneExecutionTrace(),
   };
 }
 
@@ -168,6 +183,9 @@ function mergeSettings(validated: Partial<RouterSettings>): RouterSettings {
     parallelSubagents: validated.parallelSubagents
       ? cloneParallelSubagents(validated.parallelSubagents)
       : base.parallelSubagents,
+    executionTrace: validated.executionTrace
+      ? cloneExecutionTrace(validated.executionTrace)
+      : base.executionTrace,
   };
 }
 
@@ -660,6 +678,47 @@ function validateParallelSubagents(
   return out;
 }
 
+function validateExecutionTrace(
+  raw: unknown,
+  warnings: string[]
+): ExecutionTraceSettings | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    warnings.push(
+      `auggieRouter.executionTrace: expected object, got ${Array.isArray(raw) ? "array" : typeof raw}`
+    );
+    return undefined;
+  }
+  const r = raw as Record<string, unknown>;
+  const out: ExecutionTraceSettings = { ...DEFAULT_EXECUTION_TRACE };
+  if ("enabled" in r) {
+    try {
+      out.enabled = assertBool(r.enabled, "executionTrace.enabled");
+    } catch (e) {
+      warnings.push((e as Error).message);
+    }
+  }
+  if ("maxResultPreviewChars" in r) {
+    try {
+      out.maxResultPreviewChars = assertInt(
+        r.maxResultPreviewChars,
+        "executionTrace.maxResultPreviewChars",
+        100,
+        100_000
+      );
+    } catch (e) {
+      warnings.push((e as Error).message);
+    }
+  }
+  if ("traceDirectory" in r) {
+    try {
+      out.traceDirectory = assertNonEmptyString(r.traceDirectory, "executionTrace.traceDirectory");
+    } catch (e) {
+      warnings.push((e as Error).message);
+    }
+  }
+  return out;
+}
+
 function assertNonEmptyStringArray(val: unknown, key: string): string[] {
   if (!Array.isArray(val)) {
     throw new Error(`auggieRouter.${key}: expected string[], got ${typeof val}`);
@@ -714,7 +773,7 @@ function validateSettings(
   }
   if ("maxJudgeIterations" in raw) {
     try {
-      out.maxJudgeIterations = assertInt(raw.maxJudgeIterations, "maxJudgeIterations", 1, 10);
+      out.maxJudgeIterations = assertInt(raw.maxJudgeIterations, "maxJudgeIterations", 0, 10);
     } catch (e) {
       warnings.push((e as Error).message);
     }
@@ -826,6 +885,12 @@ function validateSettings(
     const validated = validateParallelSubagents(raw.parallelSubagents, warnings);
     if (validated !== undefined) {
       out.parallelSubagents = validated;
+    }
+  }
+  if ("executionTrace" in raw) {
+    const validated = validateExecutionTrace(raw.executionTrace, warnings);
+    if (validated !== undefined) {
+      out.executionTrace = validated;
     }
   }
 

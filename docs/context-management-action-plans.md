@@ -1,13 +1,28 @@
 # Context Management Action Plans for `pi-auggie-router`
 
-**Status:** Draft  
+**Status:** Implemented in v1.3.0; retained as design record and follow-up tracker
 **Date:** 2026-05-10  
+**Last updated:** 2026-05-11
 **Package:** `pi-auggie-router`  
 **Source inspiration:** Sally-Ann Delucia, *Hierarchical Memory: Context Management in Agents*  
 
 ## 1. Purpose
 
-This document breaks the context-management improvement ideas into independent implementation plans. Each action can be estimated, prioritized, implemented, and shipped separately.
+This document originally broke the context-management improvement ideas into independent implementation plans. As of v1.3.0, all seven actions have MVP implementations in source and tests; this file is now retained as a design record plus a short follow-up tracker.
+
+## 1.1 v1.3.0 implementation status
+
+| Action | Status | Primary implementation/tests | Remaining follow-up |
+| --- | --- | --- | --- |
+| 1 — Overflow Context Memory | Implemented, opt-in | `src/contextMemory.ts`, `src/contextMemoryMcp.ts`, `src/auggie.ts`, `src/subAgent.ts`; `tests/contextMemory.test.ts`, `tests/contextMemoryMcp.test.ts`, `tests/overflowMemory.test.ts` | Consider exact substring search inside stored payloads. |
+| 2 — Long-Session Evaluation Fixtures | Implemented | `tests/longSession.test.ts`, `tests/fixtures/long-session/*.json` | Optional live evals outside CI. |
+| 3 — Head/Tail Chat History Assembly | Implemented, opt-in via `historyAssembly.strategy="headTail"` | `src/historyAssembler.ts`, Actor/Judge wiring; `tests/historyAssembler.test.ts`, long-session fixtures | Future host API for true session-start history. |
+| 4 — Context Budget by Execution Tier | Implemented, opt-in | `src/contextBudget.ts`, `src/index.ts`, `src/subAgent.ts`; `tests/contextBudget.test.ts`, router integration tests | Tier-driven history budgets remain deferred because history is assembled before Judge route classification. |
+| 5 — Prompt Prefix Cache Stability Tests | Implemented | `buildSubAgentSystemPrompt(...)`, `debugPromptPrefixHash`; sub-agent/router tests | Provider cache-hit metrics if Pi exposes them. |
+| 6 — Parallel Independent Sub-Agents | Implemented as explicit API, disabled by default | `src/parallelSubagents.ts`; `tests/parallelSubagents.test.ts` | No automatic decomposition yet; caller must provide subtasks. |
+| 7 — Final Output Trace Stripping | Implemented, enabled by default | `src/outputSanitizer.ts`, `src/index.ts`; `tests/outputSanitizer.test.ts`, router integration tests | Tune conservative patterns from real-world traces. |
+
+These implementations preserve backwards compatibility by default where possible. The main intentional default behavior change is conservative final-output sanitization, which is enabled to keep the main Pi chat clean.
 
 The common theme is:
 
@@ -15,26 +30,23 @@ The common theme is:
 
 `pi-auggie-router` already has a strong context-isolation architecture: a main Pi thread, a cheap Actor/Judge planning loop, and isolated skill sub-agents that must retrieve code context through Auggie's `codebase-retrieval` MCP tool. The plans below focus on making that architecture more robust for large retrieval payloads, long sessions, prompt-cache efficiency, and complex skill workflows.
 
-## 2. Current Baseline
+## 2. Baseline at time of planning
 
-Relevant current behavior:
+At the time this plan was written, relevant behavior was:
 
-- `/skill:<name>` is intercepted in `src/index.ts`.
-- `runActorJudgeLoop(...)` builds a structured brief from recent chat history.
-- `historyWindow` defaults to `20` and is read through `host.getRecentMessages(...)`.
-- `executeSkill(...)` in `src/subAgent.ts` runs an isolated sub-agent with:
+- `/skill:<name>` was intercepted in `src/index.ts`.
+- `runActorJudgeLoop(...)` built a structured brief from recent chat history.
+- `historyWindow` defaulted to `20` and was read through `host.getRecentMessages(...)`.
+- `executeSkill(...)` in `src/subAgent.ts` ran an isolated sub-agent with:
   - skill instructions,
   - `AUGGIE_DIRECTIVE`,
   - optional system appendix,
   - the rendered Actor/Judge brief as user prompt,
   - Auggie MCP attached.
-- `makeOverflowMiddleware(...)` in `src/auggie.ts` blocks oversized `codebase-retrieval` results and replaces them with:
+- `makeOverflowMiddleware(...)` blocked oversized `codebase-retrieval` results and returned only the legacy refine-query hint.
+- Adaptive execution routing classified work by complexity and risk, but that classification selected only the model, not the context budget.
 
-  ```text
-  Result too large. Please refine your codebase-retrieval query to be more specific.
-  ```
-
-- Adaptive execution routing already classifies work by complexity and risk, but that classification currently selects only the model, not the context budget.
+The v1.3.0 status table above supersedes this baseline.
 
 ---
 
@@ -493,7 +505,7 @@ Use the Judge's `executionRoute` classification to choose context budgets, not o
 
 ## Problem
 
-`overflowCeilingBytes` is currently static. A simple read-only docs lookup and a high-risk architecture refactor get the same Auggie payload ceiling.
+At planning time, `overflowCeilingBytes` was static. A simple read-only docs lookup and a high-risk architecture refactor got the same Auggie payload ceiling.
 
 ## Goal
 
@@ -619,7 +631,7 @@ Add tests and documentation to ensure stable provider-facing prompt prefixes acr
 
 ## Problem
 
-Provider prompt caching depends on byte-stable prefixes. `executeSkill(...)` currently constructs the system prompt from skill instructions, `AUGGIE_DIRECTIVE`, and optional appendix. This is likely cache-friendly, but there is no explicit invariant test.
+Provider prompt caching depends on byte-stable prefixes. At planning time, `executeSkill(...)` constructed the system prompt from skill instructions, `AUGGIE_DIRECTIVE`, and optional appendix, but there was no explicit invariant test to guard that cache-friendly behavior.
 
 ## Goal
 

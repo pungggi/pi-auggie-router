@@ -87,8 +87,16 @@ function renderBrief(brief: SkillBrief): string {
   if (brief.constraints.length) {
     parts.push(`Constraints:\n- ${brief.constraints.join("\n- ")}`);
   }
+  const MAX_KNOWN_CONTEXT_CHARS = 500;
   if (brief.knownContext.trim()) {
-    parts.push(`Known Context:\n${brief.knownContext.trim()}`);
+    const ctx = brief.knownContext.trim();
+    parts.push(
+      `Known Context:\n${
+        ctx.length > MAX_KNOWN_CONTEXT_CHARS
+          ? ctx.slice(0, MAX_KNOWN_CONTEXT_CHARS) + "\n[...truncated]"
+          : ctx
+      }`
+    );
   }
   if (brief.userClarifications.length) {
     parts.push(

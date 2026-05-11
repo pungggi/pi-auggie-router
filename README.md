@@ -111,6 +111,18 @@ All knobs live under `auggieRouter` in `.pi/settings.json`:
       "middleMode": "marker",
       "maxCharsPerMessage": 10000,
       "maxTotalChars": 60000
+    },
+    "contextMemory": {
+      "enabled": false,
+      "maxEntries": 8,
+      "maxBytesPerRun": 1000000,
+      "previewHeadChars": 4000,
+      "previewTailChars": 4000
+    },
+    "parallelSubagents": {
+      "enabled": false,
+      "maxSubagents": 3,
+      "perWorkerOutputCharCap": 8000
     }
   }
 }
@@ -441,6 +453,57 @@ Only the SHA-256 hash and byte length are logged — never the prompt text. A
 changing hash across runs of the same skill (with identical appendix) signals
 an accidental cache-busting regression.
 
+## Overflow context memory
+
+By default, oversized Auggie `codebase-retrieval` payloads are blocked and the
+sub-agent is told to refine its query. When `contextMemory.enabled` is `true`,
+those oversized payloads are instead stored in an execution-scoped temp store
+and the replacement message includes:
+
+- an overflow handle such as `overflow_1`,
+- the original byte size,
+- a bounded head/tail preview.
+
+During the same sub-agent run, the router attaches a small `context-memory` MCP
+server with two tools:
+
+| Tool | Purpose |
+| --- | --- |
+| `context-memory.list` | List stored overflow entries by metadata only. |
+| `context-memory.read` | Read a bounded character slice for a known overflow handle. |
+
+The MCP read surface is intentionally narrow: `context-memory.read` caps each
+slice at 32 000 characters and accepts only generated handles matching
+`overflow_<n>`. The temp store is disposed after the sub-agent resolves or
+rejects, so there is no cross-run memory.
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `contextMemory.enabled` | `false` | Master switch. When `false`, legacy overflow replacement text is used. |
+| `contextMemory.maxEntries` | `8` | Maximum stored overflow payloads per skill execution. |
+| `contextMemory.maxBytesPerRun` | `1000000` | Cumulative byte cap per skill execution. |
+| `contextMemory.previewHeadChars` | `4000` | Characters from the beginning included in the replacement preview. |
+| `contextMemory.previewTailChars` | `4000` | Characters from the end included in the replacement preview. |
+
+## Parallel sub-agent runner API
+
+`runParallelSubagents(...)` is exported for hosts or advanced integrations that
+want to split an already-known task into explicit independent subtasks. The
+main `/skill` router does not automatically decompose user requests.
+
+The feature is disabled by default and refuses to run unless
+`parallelSubagents.enabled=true`. Each worker sub-agent receives the same stable
+skill system prompt plus one compact subtask brief in its user prompt, its own
+Auggie MCP stack, and isolated context-memory plumbing when enabled. Worker
+outputs are capped before deterministic synthesis, so no extra LLM call is
+needed to combine results.
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `parallelSubagents.enabled` | `false` | Master switch for the explicit runner API. |
+| `parallelSubagents.maxSubagents` | `3` | Maximum concurrent workers allowed by settings. Caller overrides are bounded by this cap. |
+| `parallelSubagents.perWorkerOutputCharCap` | `8000` | Default cap for each worker's final text. `0` disables the cap. |
+
 ## Execution flow
 
 1. **Intercept** — `onUserInput` matches `^/skill:([a-zA-Z0-9_-]+)`, swallows
@@ -464,17 +527,25 @@ an accidental cache-busting regression.
    `executionRoute` is combined with preference, safety floors, and the
    configured pool to select exactly one model. The selection is sticky for
    the entire run and never injected into the sub-agent prompt.
-7. **Sub-agent execution** — the input editor is locked, a `[System]: ⚙️ Executing …`
+7. **Context budget selection** — if `contextBudgets.enabled=true`, the router
+   chooses a per-tier overflow ceiling for the run. Otherwise it uses the
+   static top-level `overflowCeilingBytes`.
+8. **Sub-agent execution** — the input editor is locked, a `[System]: ⚙️ Executing …`
    marker is posted, and an isolated Pi sub-agent runs at `temperature: 0.0`
-   with the `auggie` MCP attached over stdio. The sub-agent's prompt is
-   appended with: *"To gather context, you MUST strictly use the MCP tool
-   named `codebase-retrieval`. Do not attempt to run auggie in the terminal."*
-   A structured route log is emitted at this point.
-8. **Overflow middleware** — every `auggie/codebase-retrieval` response over
-   25 KB (configurable) is dropped and replaced with `"Result too large.
-   Please refine your codebase-retrieval query to be more specific."`
-9. **Resolution** — final sub-agent text is posted to the main thread, the
-   editor is unlocked, the state machine resets to `idle`.
+   with the `auggie` MCP attached over stdio. If `contextMemory.enabled=true`,
+   the execution-scoped `context-memory` MCP is attached too. The sub-agent's
+   prompt is appended with: *"To gather context, you MUST strictly use the MCP
+   tool named `codebase-retrieval`. Do not attempt to run auggie in the terminal."*
+   Structured route, context-budget, and optional prompt-prefix logs are emitted
+   at this point.
+9. **Overflow middleware** — every oversized `auggie/codebase-retrieval` response
+   is blocked. With context memory disabled, it is replaced with `"Result too
+   large. Please refine your codebase-retrieval query to be more specific."`
+   With context memory enabled, the payload is stored execution-locally and the
+   replacement includes an overflow handle plus bounded preview.
+10. **Resolution** — final sub-agent text is sanitized according to
+   `outputSanitizer`, posted to the main thread, the editor is unlocked, and the
+   state machine resets to `idle`.
 
 ## State machine
 
@@ -503,6 +574,11 @@ get a `[System]: Router busy` warning.
 | Adaptive preference       | `balanced`                       | Neutral cost-quality bias.                         |
 | Skill model policy        | `pin`                            | Preserve existing `SKILL.md model:` behavior.      |
 | Surface routing decision  | `false`                          | Keep default UI minimal.                           |
+| Output sanitizer          | enabled                          | Keeps tool traces out of the main chat.            |
+| Context budgets           | disabled                         | Static overflow ceiling unless explicitly enabled. |
+| History assembly          | `recent`                         | Preserve legacy history behavior by default.       |
+| Context memory            | disabled                         | Legacy overflow replacement unless opted in.       |
+| Parallel sub-agents       | disabled                         | Explicit advanced API only.                        |
 
 ## Security model
 

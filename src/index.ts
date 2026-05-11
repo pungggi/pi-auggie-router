@@ -399,6 +399,12 @@ export type {
   WorkerResult,
   WorkerStoppedReason,
 } from "./parallelSubagents.js";
+export { ExecutionTraceStore, makeTraceMiddleware } from "./executionTrace.js";
+export type {
+  ExecutionTrace,
+  ExecutionTraceStoreSettings,
+  ToolCallEntry,
+} from "./executionTrace.js";
 export { buildSubAgentSystemPrompt, executeSkill } from "./subAgent.js";
 export type { ExecutionInput } from "./subAgent.js";
 export { sanitizeFinalText } from "./outputSanitizer.js";

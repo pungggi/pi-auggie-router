@@ -14,6 +14,7 @@ import type {
   PiHost,
   RouterSettings,
   SkillModelPolicy,
+  TraceObservabilitySettings,
 } from "./types.js";
 
 export const DEFAULT_OUTPUT_SANITIZER: OutputSanitizerSettings = {
@@ -43,6 +44,18 @@ export const DEFAULT_EXECUTION_TRACE: ExecutionTraceSettings = {
   enabled: true,
   maxResultPreviewChars: 2_000,
   traceDirectory: ".pi/traces",
+};
+
+export const DEFAULT_TRACE_OBSERVABILITY: TraceObservabilitySettings = {
+  enabled: true,
+  showReportAfterExecution: false,
+  degradationAlertEnabled: true,
+  degradationConsecutiveFailures: 3,
+  degradationAlertCooldownHours: 24,
+  reportMaxTraces: 10,
+  reportMaxInlineTraces: 5,
+  regressionWindowSize: 10,
+  maxTracesPerSkill: 20,
 };
 
 export const DEFAULT_PARALLEL_SUBAGENTS: ParallelSubagentsSettings = {
@@ -93,6 +106,7 @@ export const DEFAULT_SETTINGS: RouterSettings = {
   contextMemory: DEFAULT_CONTEXT_MEMORY,
   parallelSubagents: DEFAULT_PARALLEL_SUBAGENTS,
   executionTrace: DEFAULT_EXECUTION_TRACE,
+  traceObservability: DEFAULT_TRACE_OBSERVABILITY,
 };
 
 function cloneExecutionRouting(
@@ -143,6 +157,12 @@ function cloneExecutionTrace(
   return { ...s };
 }
 
+function cloneTraceObservability(
+  s: TraceObservabilitySettings = DEFAULT_TRACE_OBSERVABILITY
+): TraceObservabilitySettings {
+  return { ...s };
+}
+
 function cloneDefaultSettings(): RouterSettings {
   return {
     ...DEFAULT_SETTINGS,
@@ -154,6 +174,7 @@ function cloneDefaultSettings(): RouterSettings {
     contextMemory: cloneContextMemory(),
     parallelSubagents: cloneParallelSubagents(),
     executionTrace: cloneExecutionTrace(),
+    traceObservability: cloneTraceObservability(),
   };
 }
 
@@ -186,6 +207,9 @@ function mergeSettings(validated: Partial<RouterSettings>): RouterSettings {
     executionTrace: validated.executionTrace
       ? cloneExecutionTrace(validated.executionTrace)
       : base.executionTrace,
+    traceObservability: validated.traceObservability
+      ? cloneTraceObservability(validated.traceObservability)
+      : base.traceObservability,
   };
 }
 
@@ -711,7 +735,96 @@ function validateExecutionTrace(
   }
   if ("traceDirectory" in r) {
     try {
-      out.traceDirectory = assertNonEmptyString(r.traceDirectory, "executionTrace.traceDirectory");
+      const raw = assertNonEmptyString(r.traceDirectory, "executionTrace.traceDirectory");
+      // Reject absolute paths and values containing '..' to prevent path traversal
+      // outside the workspace when the router writes/deletes trace files.
+      const normalised = raw.replace(/\\/g, "/");
+      const isAbsolute = normalised.startsWith("/") || /^[A-Za-z]:\//.test(normalised);
+      const hasTraversal = normalised.split("/").some((p) => p === "..");
+      if (isAbsolute || hasTraversal) {
+        throw new Error(
+          `auggieRouter.executionTrace.traceDirectory: must be a relative path within the workspace (no ".." or absolute paths), got "${raw}"`
+        );
+      }
+      out.traceDirectory = raw;
+    } catch (e) {
+      warnings.push((e as Error).message);
+    }
+  }
+  return out;
+}
+
+function validateTraceObservability(
+  raw: unknown,
+  warnings: string[]
+): TraceObservabilitySettings | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    warnings.push(
+      `auggieRouter.traceObservability: expected object, got ${Array.isArray(raw) ? "array" : typeof raw}`
+    );
+    return undefined;
+  }
+  const r = raw as Record<string, unknown>;
+  const out: TraceObservabilitySettings = { ...DEFAULT_TRACE_OBSERVABILITY };
+  if ("enabled" in r) {
+    try {
+      out.enabled = assertBool(r.enabled, "traceObservability.enabled");
+    } catch (e) {
+      warnings.push((e as Error).message);
+    }
+  }
+  if ("showReportAfterExecution" in r) {
+    try {
+      out.showReportAfterExecution = assertBool(r.showReportAfterExecution, "traceObservability.showReportAfterExecution");
+    } catch (e) {
+      warnings.push((e as Error).message);
+    }
+  }
+  if ("degradationAlertEnabled" in r) {
+    try {
+      out.degradationAlertEnabled = assertBool(r.degradationAlertEnabled, "traceObservability.degradationAlertEnabled");
+    } catch (e) {
+      warnings.push((e as Error).message);
+    }
+  }
+  if ("degradationConsecutiveFailures" in r) {
+    try {
+      out.degradationConsecutiveFailures = assertInt(r.degradationConsecutiveFailures, "traceObservability.degradationConsecutiveFailures", 2, 20);
+    } catch (e) {
+      warnings.push((e as Error).message);
+    }
+  }
+  if ("degradationAlertCooldownHours" in r) {
+    try {
+      out.degradationAlertCooldownHours = assertInt(r.degradationAlertCooldownHours, "traceObservability.degradationAlertCooldownHours", 1, 720);
+    } catch (e) {
+      warnings.push((e as Error).message);
+    }
+  }
+  if ("reportMaxTraces" in r) {
+    try {
+      out.reportMaxTraces = assertInt(r.reportMaxTraces, "traceObservability.reportMaxTraces", 1, 100);
+    } catch (e) {
+      warnings.push((e as Error).message);
+    }
+  }
+  if ("reportMaxInlineTraces" in r) {
+    try {
+      out.reportMaxInlineTraces = assertInt(r.reportMaxInlineTraces, "traceObservability.reportMaxInlineTraces", 1, 50);
+    } catch (e) {
+      warnings.push((e as Error).message);
+    }
+  }
+  if ("regressionWindowSize" in r) {
+    try {
+      out.regressionWindowSize = assertInt(r.regressionWindowSize, "traceObservability.regressionWindowSize", 3, 50);
+    } catch (e) {
+      warnings.push((e as Error).message);
+    }
+  }
+  if ("maxTracesPerSkill" in r) {
+    try {
+      out.maxTracesPerSkill = assertInt(r.maxTracesPerSkill, "traceObservability.maxTracesPerSkill", 5, 200);
     } catch (e) {
       warnings.push((e as Error).message);
     }
@@ -829,7 +942,15 @@ function validateSettings(
   }
   if ("auggieBinPath" in raw) {
     try {
-      out.auggieBinPath = assertNonEmptyString(raw.auggieBinPath, "auggieBinPath");
+      const bin = assertNonEmptyString(raw.auggieBinPath, "auggieBinPath");
+      // Restrict to a binary name only (no path separators) so a malicious
+      // settings file cannot execute an arbitrary binary via an absolute path.
+      if (bin.includes("/") || bin.includes("\\")) {
+        throw new Error(
+          `auggieRouter.auggieBinPath: must be a binary name, not a path (got "${bin}")`
+        );
+      }
+      out.auggieBinPath = bin;
     } catch (e) {
       warnings.push((e as Error).message);
     }
@@ -891,6 +1012,12 @@ function validateSettings(
     const validated = validateExecutionTrace(raw.executionTrace, warnings);
     if (validated !== undefined) {
       out.executionTrace = validated;
+    }
+  }
+  if ("traceObservability" in raw) {
+    const validated = validateTraceObservability(raw.traceObservability, warnings);
+    if (validated !== undefined) {
+      out.traceObservability = validated;
     }
   }
 

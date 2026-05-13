@@ -153,6 +153,43 @@ export default function auggieRouterExtension(pi: ExtensionAPI): void {
     },
   });
 
+  // ── Trace observability commands ────────────────────────────────────
+  // These are also intercepted by the router's input hook, but registering
+  // them as Pi commands makes them discoverable in the command palette and
+  // enables autocomplete for arguments.
+
+  pi.registerCommand("skill:trace-report", {
+    description: "Show trace report for a skill's recent execution history",
+    getArgumentCompletions(prefix: string): AutocompleteItem[] | null {
+      const skills = getSkillCommands().map((cmd) => cmd.name);
+      const filtered = skills.filter((name) =>
+        name.toLowerCase().includes(prefix.toLowerCase()),
+      );
+      if (filtered.length === 0) return null;
+      return filtered.map((name) => ({
+        value: name,
+        label: name,
+        description: "Skill name",
+      }));
+    },
+    handler: async (args: string, _ctx: ExtensionCommandContext) => {
+      const skillName = args?.trim();
+      if (skillName) {
+        await router.trigger(`/skill:trace-report ${skillName}`);
+      }
+    },
+  });
+
+  pi.registerCommand("skill:trace-view", {
+    description: "Show tool-call timeline for a single trace file",
+    handler: async (args: string, _ctx: ExtensionCommandContext) => {
+      const filename = args?.trim();
+      if (filename) {
+        await router.trigger(`/skill:trace-view ${filename}`);
+      }
+    },
+  });
+
   // ── Inline autocomplete for `/skill ` in the editor ─────────────────
   pi.on("session_start", async (_event, ctx) => {
     ctx.ui.addAutocompleteProvider(

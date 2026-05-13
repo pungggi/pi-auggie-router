@@ -8,7 +8,15 @@ import {
 } from "./executionRouter.js";
 import { ExecutionTraceStore } from "./executionTrace.js";
 import type { ExecutionTrace } from "./executionTrace.js";
+import { classifyTrace, detectRegression } from "./traceClassifier.js";
+import { checkDegradationAlert, createAlertCooldownTracker } from "./degradationAlert.js";
 import { cleanupTraces } from "./traceCleanup.js";
+import { renderTraceView } from "./traceViewer.js";
+import {
+  loadAndClassifyTraces,
+  renderMiniReport,
+  renderTraceReport,
+} from "./traceReport.js";
 import {
   InvalidSkillNameError,
   loadSkill,
@@ -125,6 +133,7 @@ function formatExecutionMessage(input: {
 export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): RouterHandle {
   const settings = loadSettings(host);
   const state = new RouterState();
+  const cooldownTracker = createAlertCooldownTracker();
   const preflight = opts.preflight ?? (() => runAuggieStatus(settings));
 
   const log = (level: "debug" | "info" | "warn" | "error", msg: string) => {
@@ -300,20 +309,115 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
             );
             const workspaceRoot = host.resolveWorkspacePath(".");
             const filepath = traceStore.persist(trace, workspaceRoot);
-            log(
-              "info",
-              JSON.stringify({
-                event: "auggie-router.execution-trace",
-                skill: skill.name,
-                toolCalls: trace.toolCalls.length,
-                stoppedReason: trace.stoppedReason,
-                filepath,
-              })
-            );
 
-            // TTL-based cleanup of old traces.
+            // Trace classification + structured log.
+            const obsSettings = settings.traceObservability;
+            if (obsSettings.enabled) {
+              // Load recent history once — reused by regression detection,
+              // degradation alerts, and the mini-report.
+              const traceDir = host.resolveWorkspacePath(settings.executionTrace.traceDirectory);
+              const recentTraces = ExecutionTraceStore.loadTraces(
+                traceDir,
+                skill.name
+              );
+
+              // Classify recent traces once — cached for degradation alert
+              // and mini-report to avoid redundant classifyTrace() calls.
+              const recentVerdicts = recentTraces.map((t, i) => {
+                let v = classifyTrace(t);
+                // Use remaining traces as history for regression detection.
+                const history = recentTraces.slice(i + 1);
+                v = detectRegression(v, t, history, obsSettings.regressionWindowSize);
+                return v;
+              });
+
+              // Classify current trace with regression detection.
+              let verdict = classifyTrace(trace);
+              verdict = detectRegression(
+                verdict,
+                trace,
+                recentTraces,
+                obsSettings.regressionWindowSize
+              );
+
+              log(
+                "info",
+                JSON.stringify({
+                  event: "auggie-router.trace-classified",
+                  skill: skill.name,
+                  outcome: verdict.outcome,
+                  confidence: verdict.confidence,
+                  signals: verdict.signals,
+                  toolCalls: trace.toolCalls.length,
+                  stoppedReason: trace.stoppedReason,
+                  model: trace.model,
+                  tier: trace.route.tier,
+                })
+              );
+
+              // Degradation alert — check consecutive failures and
+              // emit system message if threshold met.
+              if (obsSettings.degradationAlertEnabled) {
+                const alertResult = checkDegradationAlert(
+                  verdict,
+                  trace,
+                  recentTraces,
+                  recentVerdicts,
+                  {
+                    enabled: obsSettings.degradationAlertEnabled,
+                    consecutiveFailures: obsSettings.degradationConsecutiveFailures,
+                    cooldownHours: obsSettings.degradationAlertCooldownHours,
+                    cooldownTracker,
+                  }
+                );
+                if (alertResult.fired && alertResult.message) {
+                  host.postSystemMessage(alertResult.message);
+                  log(
+                    "info",
+                    JSON.stringify({
+                      event: "auggie-router.degradation-alert",
+                      skill: skill.name,
+                      consecutiveFailures: obsSettings.degradationConsecutiveFailures,
+                    })
+                  );
+                }
+              }
+
+              // Auto mini-report after execution (opt-in).
+              // Reuses cached verdicts — includes regression detection.
+              if (obsSettings.showReportAfterExecution) {
+                try {
+                  const miniInput = {
+                    traces: [trace, ...recentTraces].slice(0, 3),
+                    verdicts: [verdict, ...recentVerdicts.slice(0, 2)],
+                  };
+                  const miniReport = renderMiniReport(skill.name, miniInput);
+                  host.postSystemMessage(miniReport);
+                } catch (miniErr) {
+                  log("debug", `pi-auggie-router: mini-report failed: ${(miniErr as Error).message}`);
+                }
+              }
+            } else {
+              // Observability disabled — emit basic trace log for debugging.
+              log(
+                "info",
+                JSON.stringify({
+                  event: "auggie-router.execution-trace",
+                  skill: skill.name,
+                  toolCalls: trace.toolCalls.length,
+                  stoppedReason: trace.stoppedReason,
+                  filepath,
+                })
+              );
+            }
+
+            // Count-based cleanup of old traces.
             const traceDir = host.resolveWorkspacePath(settings.executionTrace.traceDirectory);
-            const deleted = cleanupTraces(traceDir);
+            const deleted = cleanupTraces(traceDir, {
+              maxTracesPerSkill: obsSettings.enabled
+                ? obsSettings.maxTracesPerSkill
+                : 20,
+            });
             if (deleted > 0) {
               log("debug", `pi-auggie-router: cleaned up ${deleted} old trace file(s)`);
             }
@@ -380,8 +484,86 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
 
   // --- Hook wiring ---------------------------------------------------------
 
+  // Intercept `/skill:trace-report <name>` and `/skill:trace-view <filename>`
+  // as special sub-commands.
+  const TRACE_REPORT_REGEX = /^\/skill:trace-report\s+([a-zA-Z0-9_-]+)/;
+  const TRACE_VIEW_REGEX = /^\/skill:trace-view\s+([a-zA-Z0-9_.-]+\.json)\s*$/;
+
+  function handleTraceReport(skillName: string): void {
+    const obsSettings = settings.traceObservability;
+    if (!obsSettings.enabled) {
+      host.postSystemMessage("[System]: Trace observability is disabled.");
+      return;
+    }
+    const traceDir = host.resolveWorkspacePath(settings.executionTrace.traceDirectory);
+    const input = loadAndClassifyTraces(
+      traceDir,
+      skillName,
+      obsSettings.reportMaxTraces,
+      obsSettings.regressionWindowSize
+    );
+    // Note: trendWindowSize reuses regressionWindowSize — they're conceptually
+    // related (both look at recent history). A dedicated trendWindowSize setting
+    // can be added later if users need independent control.
+    const report = renderTraceReport(skillName, input, {
+      maxTraces: obsSettings.reportMaxTraces,
+      maxInlineTraces: obsSettings.reportMaxInlineTraces,
+      trendWindowSize: obsSettings.regressionWindowSize,
+    });
+    host.postSystemMessage(report);
+    log(
+      "info",
+      JSON.stringify({
+        event: "auggie-router.trace-report",
+        skill: skillName,
+        traceCount: input.traces.length,
+      })
+    );
+  }
+
+  function handleTraceView(filename: string): void {
+    const obsSettings = settings.traceObservability;
+    if (!obsSettings.enabled) {
+      host.postSystemMessage("[System]: Trace observability is disabled.");
+      return;
+    }
+    const traceDir = host.resolveWorkspacePath(settings.executionTrace.traceDirectory);
+    const trace = ExecutionTraceStore.loadSingleTrace(traceDir, filename);
+    if (!trace) {
+      host.postSystemMessage(`[System]: Trace file "${filename}" not found.`);
+      return;
+    }
+    const verdict = classifyTrace(trace);
+    const view = renderTraceView(filename, trace, verdict);
+    host.postSystemMessage(view);
+    log(
+      "info",
+      JSON.stringify({
+        event: "auggie-router.trace-view",
+        filename,
+        skill: trace.skillName,
+        outcome: verdict.outcome,
+        toolCalls: trace.toolCalls.length,
+      })
+    );
+  }
+
   // Intercept `/skill:<name>` before Pi's default handler runs.
   const offInput = host.onUserInput((raw) => {
+    // Check for trace-view sub-command first (most specific).
+    const viewMatch = TRACE_VIEW_REGEX.exec(raw.trimStart());
+    if (viewMatch) {
+      handleTraceView(viewMatch[1]!);
+      return { cancel: true };
+    }
+
+    // Check for trace-report sub-command.
+    const reportMatch = TRACE_REPORT_REGEX.exec(raw.trimStart());
+    if (reportMatch) {
+      handleTraceReport(reportMatch[1]!);
+      return { cancel: true };
+    }
+
     const match = matchSkillCommand(raw);
     if (!match) return;
     // Fire-and-forget; the state machine + UI lock provide back-pressure.
@@ -422,6 +604,7 @@ export {
   DEFAULT_PARALLEL_SUBAGENTS,
   DEFAULT_SETTINGS,
 } from "./config.js";
+export { DEFAULT_TRACE_OBSERVABILITY } from "./config.js";
 export { chooseContextBudget } from "./contextBudget.js";
 export type { EffectiveContextBudget } from "./contextBudget.js";
 export { assembleHistory } from "./historyAssembler.js";
@@ -462,8 +645,7 @@ export { sanitizeFinalText } from "./outputSanitizer.js";
 export type { SanitizeResult } from "./outputSanitizer.js";
 export { createExtensionBridge } from "./extensionBridge.js";
 export type { BridgeOptions } from "./extensionBridge.js";
-export {
-  DEFAULT_EXECUTION_ROUTE,
+export { DEFAULT_EXECUTION_ROUTE,
   coerceExecutionRoute,
   runActorJudgeLoop,
 } from "./actorJudge.js";
@@ -473,6 +655,18 @@ export type {
   ChooseExecutionModelInput,
   ExecutionRouteSelection,
 } from "./executionRouter.js";
+export { classifyTrace, detectRegression, extractSignalPrefix, OUTCOME_EMOJI, formatTraceDuration } from "./traceClassifier.js";
+export type { TraceOutcome, TraceVerdict } from "./traceClassifier.js";
+export { checkDegradationAlert, createAlertCooldownTracker, resetAlertCooldowns } from "./degradationAlert.js";
+export type { DegradationAlertConfig, DegradationAlertResult } from "./degradationAlert.js";
+export {
+  loadAndClassifyTraces,
+  renderMiniReport,
+  renderTraceReport,
+} from "./traceReport.js";
+export type { TraceReportConfig, TraceReportInput } from "./traceReport.js";
+export { renderTraceView } from "./traceViewer.js";
+export type { TraceViewConfig } from "./traceViewer.js";
 export { RouterState } from "./state.js";
 export type {
   ChatMessage,
@@ -501,5 +695,6 @@ export type {
   SubtaskBrief,
   ToolCallContext,
   ToolResultMiddleware,
+  TraceObservabilitySettings,
   UIInputInterceptor,
 } from "./types.js";

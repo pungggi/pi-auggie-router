@@ -247,3 +247,125 @@ describe("config — executionRouting validation", () => {
     }
   });
 });
+
+describe("config — auggieBinPath validation", () => {
+  it("accepts a simple binary name", () => {
+    const { workspace, cleanup } = withWorkspace({ auggieBinPath: "auggie" });
+    try {
+      const { host, warnings } = fakeHost(workspace);
+      const s = loadSettings(host);
+      assert.equal(s.auggieBinPath, "auggie");
+      assert.equal(warnings.length, 0);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("rejects an absolute Unix path and falls back to default", () => {
+    const { workspace, cleanup } = withWorkspace({ auggieBinPath: "/usr/local/bin/auggie" });
+    try {
+      const { host, warnings } = fakeHost(workspace);
+      const s = loadSettings(host);
+      assert.equal(s.auggieBinPath, DEFAULT_SETTINGS.auggieBinPath);
+      assert.ok(warnings.some((w) => w.includes("auggieBinPath")));
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("rejects an absolute Windows path and falls back to default", () => {
+    const { workspace, cleanup } = withWorkspace({ auggieBinPath: "C:\\tools\\auggie.exe" });
+    try {
+      const { host, warnings } = fakeHost(workspace);
+      const s = loadSettings(host);
+      assert.equal(s.auggieBinPath, DEFAULT_SETTINGS.auggieBinPath);
+      assert.ok(warnings.some((w) => w.includes("auggieBinPath")));
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("rejects a relative path traversal and falls back to default", () => {
+    const { workspace, cleanup } = withWorkspace({ auggieBinPath: "../../evil" });
+    try {
+      const { host, warnings } = fakeHost(workspace);
+      const s = loadSettings(host);
+      assert.equal(s.auggieBinPath, DEFAULT_SETTINGS.auggieBinPath);
+      assert.ok(warnings.some((w) => w.includes("auggieBinPath")));
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe("config — executionTrace.traceDirectory validation", () => {
+  it("accepts a simple relative path", () => {
+    const { workspace, cleanup } = withWorkspace({
+      executionTrace: { traceDirectory: ".pi/traces" },
+    });
+    try {
+      const { host, warnings } = fakeHost(workspace);
+      const s = loadSettings(host);
+      assert.equal(s.executionTrace.traceDirectory, ".pi/traces");
+      assert.equal(warnings.length, 0);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("rejects a .. traversal path and falls back to default", () => {
+    const { workspace, cleanup } = withWorkspace({
+      executionTrace: { traceDirectory: "../../outside" },
+    });
+    try {
+      const { host, warnings } = fakeHost(workspace);
+      const s = loadSettings(host);
+      assert.equal(s.executionTrace.traceDirectory, DEFAULT_SETTINGS.executionTrace.traceDirectory);
+      assert.ok(warnings.some((w) => w.includes("executionTrace.traceDirectory")));
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("rejects an absolute Unix path and falls back to default", () => {
+    const { workspace, cleanup } = withWorkspace({
+      executionTrace: { traceDirectory: "/tmp/evil" },
+    });
+    try {
+      const { host, warnings } = fakeHost(workspace);
+      const s = loadSettings(host);
+      assert.equal(s.executionTrace.traceDirectory, DEFAULT_SETTINGS.executionTrace.traceDirectory);
+      assert.ok(warnings.some((w) => w.includes("executionTrace.traceDirectory")));
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("rejects an absolute Windows path and falls back to default", () => {
+    const { workspace, cleanup } = withWorkspace({
+      executionTrace: { traceDirectory: "C:\\traces" },
+    });
+    try {
+      const { host, warnings } = fakeHost(workspace);
+      const s = loadSettings(host);
+      assert.equal(s.executionTrace.traceDirectory, DEFAULT_SETTINGS.executionTrace.traceDirectory);
+      assert.ok(warnings.some((w) => w.includes("executionTrace.traceDirectory")));
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("rejects embedded .. segment and falls back to default", () => {
+    const { workspace, cleanup } = withWorkspace({
+      executionTrace: { traceDirectory: "foo/../../../etc" },
+    });
+    try {
+      const { host, warnings } = fakeHost(workspace);
+      const s = loadSettings(host);
+      assert.equal(s.executionTrace.traceDirectory, DEFAULT_SETTINGS.executionTrace.traceDirectory);
+      assert.ok(warnings.some((w) => w.includes("executionTrace.traceDirectory")));
+    } finally {
+      cleanup();
+    }
+  });
+});

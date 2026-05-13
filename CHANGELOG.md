@@ -5,11 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Trace roadmap refocused** from harness self-evolution to trace observability for skill debugging. The original 5-phase auto-evolution loop (LLM proposer → benchmark validator → auto-apply) was killed after grill review: open-ended skills have no ground-truth signal to close the loop on. New direction is human-driven observability — deterministic trace classifier, degradation alerts, trace reports. PRD renamed to `docs/PRD-trace-observability.md`; in-source comments updated; new tracker in `docs/PRD-Implementation-Status.md` §12. No code behavior change.
+
 ## [1.4.0] — 2026-05-11
 
 ### Added
 
-- **Execution trace store** for harness self-evolution — `ExecutionTraceStore` captures every tool call (server, tool, args, result preview, blocked flag, timestamp) during sub-agent execution and persists full traces as JSON to `.pi/traces/<skillName>_<timestamp>.json`. Enabled by default via `executionTrace` settings. See `docs/PRD-harness-self-evolution.md` for the self-improvement roadmap.
+- **Execution trace store** for harness self-evolution — `ExecutionTraceStore` captures every tool call (server, tool, args, result preview, blocked flag, timestamp) during sub-agent execution and persists full traces as JSON to `.pi/traces/<skillName>_<timestamp>.json`. Enabled by default via `executionTrace` settings. See `docs/PRD-trace-observability.md` for the self-improvement roadmap.
 
 - **`makeTraceMiddleware`** — a non-blocking observer middleware that records tool calls into an `ExecutionTraceStore` without affecting execution flow. Composed before the overflow middleware so raw payloads are captured pre-replacement.
 
@@ -19,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Trace lifecycle wiring** — the router creates an `ExecutionTraceStore` before each execution, composes the trace middleware, and finalizes + persists the trace after sub-agent completion. Emits structured `auggie-router.execution-trace` log events with tool-call count and filepath.
 
-- **Harness self-evolution PRD** (`docs/PRD-harness-self-evolution.md`) — detailed 5-phase roadmap from trace collection to automatic SKILL.md improvement, inspired by Stanford/Tsinghua research on harness engineering.
+- **Harness self-evolution PRD** (`docs/PRD-trace-observability.md`) — detailed 5-phase roadmap from trace collection to automatic SKILL.md improvement, inspired by Stanford/Tsinghua research on harness engineering. (Superseded post-1.4.0; see Unreleased.)
 
 - New public exports: `ExecutionTraceStore`, `makeTraceMiddleware`, `ExecutionTrace`, `ExecutionTraceStoreSettings`, `ToolCallEntry`, `cleanupTraces`, `TraceCleanupOptions`.
 

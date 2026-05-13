@@ -128,6 +128,17 @@ All knobs live under `auggieRouter` in `.pi/settings.json`:
       "enabled": true,
       "maxResultPreviewChars": 2000,
       "traceDirectory": ".pi/traces"
+    },
+    "traceObservability": {
+      "enabled": true,
+      "showReportAfterExecution": false,
+      "degradationAlertEnabled": true,
+      "degradationConsecutiveFailures": 3,
+      "degradationAlertCooldownHours": 24,
+      "reportMaxTraces": 10,
+      "reportMaxInlineTraces": 5,
+      "regressionWindowSize": 10,
+      "maxTracesPerSkill": 20
     }
   }
 }
@@ -520,9 +531,10 @@ full transcript of every sub-agent execution and persists it to
   `maxResultPreviewChars`), blocked flag, timestamp
 - **Outcome**: final text and stopped reason
 
-This data powers future harness self-evolution (see
-[`docs/PRD-harness-self-evolution.md`](docs/PRD-harness-self-evolution.md)):
-reading raw failed traces to propose SKILL.md improvements.
+This data powers **trace observability** for skill debugging (see
+[`docs/PRD-trace-observability.md`](docs/PRD-trace-observability.md)):
+classifying trace outcomes, detecting skill degradation, and surfacing
+actionable reports to users.
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
@@ -530,9 +542,40 @@ reading raw failed traces to propose SKILL.md improvements.
 | `executionTrace.maxResultPreviewChars` | `2000` | Max characters kept from each tool result in the trace. Full payloads are not stored (could be megabytes of codebase content). |
 | `executionTrace.traceDirectory` | `".pi/traces"` | Directory (relative to workspace root) where trace JSON files are stored. |
 
-Old traces are automatically cleaned up after each run. Files older than
-7 days are deleted, and the total count is capped at 500 (oldest first).
-Use `cleanupTraces(dir, opts)` from the public API to trigger cleanup manually.
+Old traces are automatically cleaned up after each run: count-based retention
+keeps at most `maxTracesPerSkill` (default 20) trace files per skill, deleting
+the oldest first. Use `cleanupTraces(dir, opts)` from the public API to trigger
+cleanup manually.
+
+## Trace Observability
+
+When `traceObservability.enabled` is `true` (the default), the router adds a
+lightweight observability layer on top of execution traces:
+
+classifying outcomes, detecting degradation, and surfacing actionable reports.
+
+### Commands
+
+| Command | Purpose |
+| --- | --- |
+| `/skill:trace-report <name>` | Show a summary report for a skill's recent execution history — outcome distribution, common failure signals, trend line, and recent traces. |
+| `/skill:trace-view <filename>` | Show a detailed tool-call timeline for a single trace file — timestamps, args, result sizes, duration, and final text. |
+
+These commands are intercepted before Pi's default `/skill` handler runs.
+
+### Settings
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `traceObservability.enabled` | `true` | Master switch for classification, degradation alerts, and reports. |
+| `traceObservability.showReportAfterExecution` | `false` | Show a compact mini-report (last 3 traces) after every skill execution. |
+| `traceObservability.degradationAlertEnabled` | `true` | Emit a system message when a skill fails N consecutive times after prior success. |
+| `traceObservability.degradationConsecutiveFailures` | `3` | Consecutive failures required to trigger a degradation alert. |
+| `traceObservability.degradationAlertCooldownHours` | `24` | Minimum hours between repeated alerts for the same skill. |
+| `traceObservability.reportMaxTraces` | `10` | Maximum traces loaded and classified for on-demand reports. |
+| `traceObservability.reportMaxInlineTraces` | `5` | Maximum recent traces shown inline; larger datasets truncate with a count. |
+| `traceObservability.regressionWindowSize` | `10` | Number of historical traces examined for regression detection. |
+| `traceObservability.maxTracesPerSkill` | `20` | Maximum trace files retained per skill (count-based cleanup, oldest deleted first). |
 
 ### Skip-Judge mode
 
@@ -551,7 +594,8 @@ well-known skills:
 
 ## Execution flow
 
-1. **Intercept** — `onUserInput` matches `^/skill:([a-zA-Z0-9_-]+)`, swallows
+1. **Intercept** — `onUserInput` matches `/skill:trace-view`, `/skill:trace-report`,
+   then `^/skill:([a-zA-Z0-9_-]+)`, swallows
    the input, and prevents Pi's default skill handler from running.
 2. **Locate & parse** — looks for `SKILL.md` in `.pi/skills/<name>/` first,
    then `~/.pi/agent/skills/<name>/`. Frontmatter is parsed with

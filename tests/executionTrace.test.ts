@@ -153,4 +153,84 @@ describe("ExecutionTraceStore", () => {
     const loaded = ExecutionTraceStore.loadTraces("/nonexistent/path", "anything");
     assert.deepEqual(loaded, []);
   });
+
+  // ---------------------------------------------------------------------------
+  // loadSingleTrace
+  // ---------------------------------------------------------------------------
+
+  it("loads a single trace by filename", async () => {
+    const { mkdirSync, rmSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const { randomUUID } = await import("node:crypto");
+
+    const dir = join(tmpdir(), `pi-trace-single-${randomUUID()}`);
+    const settings = { ...DEFAULT_SETTINGS, traceDirectory: "traces" };
+    const store = new ExecutionTraceStore(settings, {
+      skillName: "view-test",
+      model: "m",
+      brief: MOCK_BRIEF,
+      route: MOCK_ROUTE,
+    });
+    const mw = makeTraceMiddleware(store);
+    mw({ serverName: "auggie", toolName: "read", args: { path: "foo.ts" } }, "file content");
+
+    const trace = store.finalize("output", "completed");
+    const filepath = store.persist(trace, dir);
+    const filename = filepath.split(/[\\/]/).pop()!;
+
+    const loaded = ExecutionTraceStore.loadSingleTrace(join(dir, "traces"), filename);
+    assert.ok(loaded !== null);
+    assert.equal(loaded.skillName, "view-test");
+    assert.equal(loaded.toolCalls.length, 1);
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("returns null for non-existent file", () => {
+    const loaded = ExecutionTraceStore.loadSingleTrace("/nonexistent", "missing.json");
+    assert.equal(loaded, null);
+  });
+
+  it("rejects filenames with path separators (traversal prevention)", () => {
+    assert.equal(ExecutionTraceStore.loadSingleTrace("/tmp", "../etc/passwd.json"), null);
+    assert.equal(ExecutionTraceStore.loadSingleTrace("/tmp", "sub/file.json"), null);
+    assert.equal(ExecutionTraceStore.loadSingleTrace("/tmp", "..\\etc.json"), null);
+  });
+
+  it("rejects filenames without .json extension", () => {
+    assert.equal(ExecutionTraceStore.loadSingleTrace("/tmp", "trace.txt"), null);
+  });
+
+  it("returns null for corrupted JSON", async () => {
+    const { mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const { randomUUID } = await import("node:crypto");
+
+    const dir = join(tmpdir(), `pi-trace-corrupt-${randomUUID()}`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "bad.json"), "NOT VALID JSON{{{", "utf8");
+
+    const loaded = ExecutionTraceStore.loadSingleTrace(dir, "bad.json");
+    assert.equal(loaded, null);
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("returns null for valid JSON that is not a trace object", async () => {
+    const { mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const { randomUUID } = await import("node:crypto");
+
+    const dir = join(tmpdir(), `pi-trace-shape-${randomUUID()}`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "notaTrace.json"), JSON.stringify({ foo: "bar" }), "utf8");
+
+    const loaded = ExecutionTraceStore.loadSingleTrace(dir, "notaTrace.json");
+    assert.equal(loaded, null);
+
+    rmSync(dir, { recursive: true, force: true });
+  });
 });

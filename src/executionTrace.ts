@@ -4,9 +4,10 @@
  *
  * Design rationale (from "Rethinking Agents — Harness Is All You Need"):
  *   The Tsinghua + DSPy research showed that raw execution traces are
- *   irreplaceable for harness self-improvement. When they replaced traces
+ *   irreplaceable for understanding agent behavior. When they replaced traces
  *   with summaries, accuracy dropped from 50% to 34%. This store captures
- *   the raw signal so future harness-evolution passes can read it.
+ *   the raw signal so trace observability (heuristic classification, degradation
+ *   detection, human-readable reports) can consume it.
  *
  * Lifetime:
  *   - Created before each `runSubAgent` call.
@@ -175,9 +176,50 @@ export class ExecutionTraceStore {
   }
 
   /**
+   * Load a single trace by its filename.
+   *
+   * Validates that the filename is a `.json` file with no path separators
+   * (prevents path traversal). Does NOT validate the `<skillName>_<timestamp>` — *   * naming convention — any `.json` file in the trace directory can be loaded.
+   * Returns `null` if the file doesn't exist, is corrupted, or fails validation.
+   *
+   * @param traceDirectory Absolute path to the trace directory.
+   * @param filename The trace filename (e.g. `"refactor_1746960622000.json"`).
+   */
+  static loadSingleTrace(
+    traceDirectory: string,
+    filename: string
+  ): ExecutionTrace | null {
+    // Validate filename — must be a simple JSON file with no path separators.
+    if (
+      !filename.endsWith(".json") ||
+      filename.includes("/") ||
+      filename.includes("\\") ||
+      filename.includes("..")
+    ) {
+      return null;
+    }
+    const filepath = join(traceDirectory, filename);
+    try {
+      const raw = readFileSync(filepath, "utf8");
+      const parsed = JSON.parse(raw);
+      // Defensive shape check — reject files that aren't valid trace objects.
+      if (
+        typeof parsed !== "object" || parsed === null ||
+        typeof parsed.skillName !== "string" ||
+        !Array.isArray(parsed.toolCalls)
+      ) {
+        return null;
+      }
+      return parsed as ExecutionTrace;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Load all persisted traces for a given skill name, sorted by timestamp
    * (newest first). Useful for feeding raw traces into the Actor/Judge loop
-   * for harness self-evolution.
+   * for trace observability (classification, degradation detection, reports).
    */
   static loadTraces(
     traceDirectory: string,

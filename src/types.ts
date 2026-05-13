@@ -211,6 +211,28 @@ export interface ExecutionTraceSettings {
   traceDirectory: string;
 }
 
+/** Trace observability — classification, degradation alerts, and reporting. */
+export interface TraceObservabilitySettings {
+  /** Master switch for trace observability features. */
+  enabled: boolean;
+  /** Show a mini-report (last 3 traces) after every skill execution. Off by default. */
+  showReportAfterExecution: boolean;
+  /** Enable degradation alerts as system messages. */
+  degradationAlertEnabled: boolean;
+  /** Number of consecutive failures required to trigger a degradation alert. */
+  degradationConsecutiveFailures: number;
+  /** Cooldown between repeated alerts for the same skill, in hours. */
+  degradationAlertCooldownHours: number;
+  /** Maximum traces to include in an on-demand trace report. */
+  reportMaxTraces: number;
+  /** Maximum traces shown inline before switching to file output. */
+  reportMaxInlineTraces: number;
+  /** Number of historical traces the regression detector examines. */
+  regressionWindowSize: number;
+  /** Maximum number of traces to keep per skill (count-based retention). */
+  maxTracesPerSkill: number;
+}
+
 export interface RouterSettings {
   /** LLM gateway prefix; e.g. `openrouter`. */
   defaultProvider: string;
@@ -262,8 +284,10 @@ export interface RouterSettings {
   contextMemory: ContextMemorySettings;
   /** Action 6 — parallel independent sub-agents. Disabled by default. */
   parallelSubagents: ParallelSubagentsSettings;
-  /** Execution trace persistence for harness self-evolution. Enabled by default. */
+  /** Execution trace persistence for skill debugging and observability. Enabled by default. */
   executionTrace: ExecutionTraceSettings;
+  /** Trace observability — classification, degradation alerts, and reporting. Enabled by default. */
+  traceObservability: TraceObservabilitySettings;
 }
 
 export type ExecutionRoutingPreference =

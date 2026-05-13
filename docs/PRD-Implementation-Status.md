@@ -6,6 +6,10 @@
 **Last updated:** 2026-05-11
 **Overall status:** Adaptive execution routing MVP complete and shipped in the 1.x line. v1.3.0 adds the separate context-management MVPs tracked in [`docs/context-management-action-plans.md`](./context-management-action-plans.md). Phase 6 (same-skill route memory) remains deferred.
 
+---
+
+Also tracks: **Trace Observability for Skill Debugging** ([`docs/PRD-trace-observability.md`](./PRD-trace-observability.md)) — replaces the former self-evolution PRD. Status: Phase 1 complete (trace store shipped in v1.4.0); Phase 2 not started. See [Section 12](#12-trace-observability-status).
+
 ## 1. Status legend
 
 | Marker | Meaning |
@@ -461,3 +465,101 @@ The PRD implementation is complete when:
 - `[x]` `npm run build` passes.
 - `[x]` README documents the new configuration and backwards-compatible default behavior.
 - `[x]` Any deferred decisions are explicitly marked `[d]` or moved to a follow-up PRD.
+
+---
+
+## 12. Trace Observability Status
+
+**Source PRD:** [`docs/PRD-trace-observability.md`](./PRD-trace-observability.md) (rewritten from former "Harness Self-Evolution via Execution Traces" PRD)
+**Last updated:** 2026-05-11
+
+### Background
+
+The original PRD proposed a 5-phase self-evolution loop (LLM proposer → benchmark validator → auto-apply) inspired by the Tsinghua/DSPy research. After interrogation (see [`../grill-me-sessions/self-evolution.grill.md`](../grill-me-sessions/self-evolution.grill.md)), we determined the core mechanism requires objective ground-truth scoring that does not exist in auggie-router's open-ended, one-shot execution environment. The PRD was excitement-driven, not pain-driven.
+
+The PRD was rewritten to focus on **lightweight trace observability** — making traces legible to humans rather than automating instruction rewrites.
+
+### Milestone overview
+
+| Phase | Name | Status | Notes |
+| --- | --- | --- | --- |
+| 1 | Trace Collection | `[x]` | `ExecutionTraceStore` shipped in v1.4.0 |
+| 2 | Trace Classifier + Structured Logging | `[x]` | `classifyTrace()` with deterministic heuristics; `detectRegression()` for consecutive failure escalation; count-based cleanup; `TraceObservabilitySettings` config |
+| 3 | Degradation Alerts | `[x]` | `checkDegradationAlert()` with consecutive failure counting, cooldown tracking, signal aggregation, system message formatting; wired into index.ts |
+| 4 | Trace Report Command | `[x]` | `/skill:trace-report <name>` command; `renderTraceReport()` with outcome distribution, signal aggregation, trend line, recent traces; `renderMiniReport()` for auto after-execution; wired into index.ts input hook |
+| 5 | Single-Trace Viewer | `[x]` | `/skill:trace-view <filename>` for deep debugging; tool-call timeline with args preview, result sizes, duration, signals |
+
+### Phase 1 — Trace Collection `[x]`
+
+- `[x]` `ExecutionTraceStore` persists traces to `.pi/traces/<skillName>_<timestamp>.json`
+- `[x]` `makeTraceMiddleware` records tool calls non-blockingly
+- `[x]` `ExecutionTraceSettings` in config and types
+- `[x]` `executeSkill` accepts optional `traceStore` input
+
+### Phase 2 — Trace Classifier + Structured Logging `[x]`
+
+- `[x]` Define `TraceVerdict` type and `classifyTrace()` function
+- `[x]` Implement heuristic classification signals (timeout, inactivity, abort, empty output, error markers, high tool-call count, low confidence)
+- `[x]` Emit `trace-classified` structured log after each execution
+- `[x]` Rewrite trace cleanup from TTL-based to count-based per-skill retention (`maxTracesPerSkill`, default 20)
+- `[x]` Add `detectRegression()` — upgrades `likely-failure` to `likely-regression` when ≥3 consecutive failures after prior success
+- `[x]` Define `TraceObservabilitySettings` in types and config with full validation
+- `[x]` Wire classifier into trace persistence flow in `index.ts`
+
+### Phase 3 — Degradation Alerts `[x]`
+
+- `[x]` Track consecutive failure count per skill from classified traces
+- `[x]` Emit degradation alert system message when ≥ N consecutive failures
+- `[x]` Rate-limit alerts (cooldown per skill, default 24h)
+- `[x]` Only alert if skill has at least one historical success (no false alerts on skills that never worked)
+- `[x]` Aggregate signal counts across consecutive failures in alert message
+- `[x]` Show last successful run timestamp in alert message
+- `[x]` `resetAlertCooldowns()` exported for testing
+- `[x]` In-memory cooldown state (resets on router restart, acceptable for "don't nag" guard)
+
+### Phase 4 — Trace Report Command `[x]`
+
+- `[x]` Implement `/skill:trace-report <name>` command surface (intercepted before `/skill:` handler)
+- `[x]` Load last N traces, classify, render summary with success rates and common signals
+- `[x]` Include trend line (success rate over recent runs)
+- `[x]` List recent traces with verdicts, tool-call counts, and durations
+- `[x]` Auto mini-report after execution when `showReportAfterExecution` is enabled
+- `[x]` Outcome distribution with ASCII bar chart
+- `[x]` Signal aggregation (most common failure signals with counts)
+- `[x]` `loadAndClassifyTraces()` helper for loading + classifying in one call
+
+### Phase 5 — Single-Trace Viewer `[x]`
+
+- `[x]` Implement `/skill:trace-view <filename>` command surface
+- `[x]` Add `ExecutionTraceStore.loadSingleTrace()` static method with path-traversal protection
+- `[x]` Render tool-call timeline with timestamps, args summaries, result preview sizes
+- `[x]` Show metadata header (model, route, confidence, risk, duration, tool-call count)
+- `[x]` Show classification verdict with signals
+- `[x]` Show final text (truncated for inline display)
+- `[x]` Timeline truncation for large tool-call counts (first/last split with ellipsis)
+- `[x]` Stopped-reason annotation (timeout/inactivity/abort emojis)
+- `[x]` 30 new tests (viewer rendering, timeline truncation, args preview, duration, loadSingleTrace, path-traversal prevention)
+
+### Open decisions
+
+| Decision | Status | Resolution |
+| --- | --- | --- |
+| How to surface the trace report? | `[x]` | Auto-threshold: inline ≤5 traces, file for larger |
+| Should `classifyTrace` ever use an LLM? | `[x]` | No — deterministic only, `confidence: number` (0..1) |
+| Degradation alerts in router or separate extension? | `[x]` | Router |
+| Default trace TTL? | `[x]` | Superseded by count-based `maxTracesPerSkill` (default 20) |
+| Report inline or to file? | `[x]` | Auto-threshold (merged with report surface decision) |
+
+### Progress log
+
+| Date | Change | Author | Notes |
+| --- | --- | --- | --- |
+| 2026-05-11 | Original self-evolution PRD created | AI assistant | 5-phase propose/validate/auto-apply loop |
+| 2026-05-11 | Self-evolution PRD grilled and killed | Grill session | Phases 3-5 eliminated; domain mismatch with Tsinghua research (no ground truth) |
+| 2026-05-11 | PRD rewritten as Trace Observability | AI assistant | `docs/PRD-harness-self-evolution.md` rewritten and renamed to `docs/PRD-trace-observability.md` |
+| 2026-05-11 | Implementation status tracker added | AI assistant | This section |
+| 2026-05-11 | Phase 2 implemented | AI assistant | `classifyTrace()`, `detectRegression()`, count-based cleanup, `TraceObservabilitySettings` config, 248 tests passing |
+| 2026-05-11 | Phase 3 implemented | AI assistant | `checkDegradationAlert()`, signal aggregation, cooldown tracking, alert formatting, wired into index.ts, 261 tests passing |
+| 2026-05-11 | Phase 4 implemented | AI assistant | `/skill:trace-report <name>`, `renderTraceReport()`, `renderMiniReport()`, trend line, signal aggregation, auto mini-report, 273 tests passing |
+| 2026-05-11 | Code review fixes (9 issues) | AI assistant | Fixed dead `maxInlineTraces`, per-instance cooldown tracker, cached verdicts, shared `extractSignalPrefix`, documented divergences; 283 tests passing |
+| 2026-05-11 | Phase 5 implemented | AI assistant | `/skill:trace-view <filename>`, `renderTraceView()`, `loadSingleTrace()`, tool-call timeline, args preview, timeline truncation, path-traversal protection; 313 tests passing |

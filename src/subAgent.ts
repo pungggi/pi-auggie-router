@@ -62,7 +62,7 @@ export interface ExecutionInput {
    */
   contextMemory?: ContextMemoryStore;
   /**
-   * Execution trace store for harness self-evolution. When provided,
+   * Execution trace store for skill debugging and observability. When provided,
    * `executeSkill` composes `makeTraceMiddleware(store)` before the
    * overflow middleware so every tool call is recorded.
    * The caller owns lifecycle: create before execution, finalize + persist

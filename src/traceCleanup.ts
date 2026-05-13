@@ -1,32 +1,67 @@
 /**
- * Trace cleanup — TTL-based removal of old execution trace files.
+ * Trace cleanup — removal of old execution trace files.
  *
  * Prevents unbounded disk growth in `.pi/traces/`. Called by the router
  * after each trace persist, or manually via the exported helper.
  *
- * Cleanup strategy: delete any trace file older than `maxAgeMs`. The
- * default TTL is 7 days. A maximum file count cap ensures that even
- * with high-frequency skill usage, the directory stays bounded.
+ * Current cleanup strategy (v1.4+): count-based retention per skill.
+ * Keeps the last `maxTracesPerSkill` traces per skill and deletes the rest.
+ * This auto-tunes to usage — light users' traces live longer because they
+ * accumulate slowly; heavy users' traces get pruned more often but the
+ * regression window is always full. The default (20) exceeds
+ * `regressionWindowSize` (10) so the degradation detector always has enough
+ * signal.
+ *
+ * Legacy TTL-based options are preserved for backward compatibility.
  */
 
 import { readdirSync, statSync, unlinkSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
 export interface TraceCleanupOptions {
-  /** Maximum age of a trace file in milliseconds. Default: 7 days. */
-  maxAgeMs?: number;
   /**
-   * Maximum number of trace files to keep (globally, across all skills).
-   * When exceeded, oldest files are deleted first. 0 = no cap. Default: 500.
+   * Maximum number of trace files to keep per skill (count-based retention).
+   * When exceeded for a given skill, oldest files are deleted first.
+   * Default: 20.
    */
-  maxFiles?: number;
+  maxTracesPerSkill?: number;
+  /**
+   * Maximum age of a trace file in milliseconds. Files older than this are
+   * deleted regardless of skill. 0 = no age-based cleanup.
+   * Default: 0 (disabled — count-based retention handles it).
+   */
+  maxAgeMs?: number;
 }
 
-const DEFAULT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
-const DEFAULT_MAX_FILES = 500;
+const DEFAULT_MAX_TRACES_PER_SKILL = 20;
 
 /**
- * Remove old trace files from the trace directory.
+ * Extract skill name from a trace filename.
+ * Trace files are named `<skillName>_<timestamp>.json`.
+ *
+ * ⚠️ IMPORTANT: This assumes skill names do NOT contain underscores.
+ * By convention, skill names use hyphens (e.g. "plan-feature" not "plan_feature").
+ * If a skill name contains underscores, this function will incorrectly
+ * truncate at the last underscore, treating the remainder as part of the
+ * timestamp. The convention is enforced by the parser's VALID_SKILL_NAME regex
+ * which only allows `[a-zA-Z0-9_-]+` — but the underscore is the delimiter here.
+ *
+ * If this ever becomes a problem, switch to a delimiter like `__` (double
+ * underscore) or `--` between name and timestamp.
+ */
+function extractSkillName(filename: string): string | null {
+  if (!filename.endsWith(".json")) return null;
+  // Remove .json extension
+  const base = filename.slice(0, -5);
+  // Split on last underscore (the one before the timestamp)
+  const lastUnderscore = base.lastIndexOf("_");
+  if (lastUnderscore === -1) return null;
+  return base.slice(0, lastUnderscore);
+}
+
+/**
+ * Remove old trace files from the trace directory using count-based
+ * retention per skill.
  *
  * @param traceDirectory - Absolute path to the trace directory.
  * @param opts - Cleanup options.
@@ -38,59 +73,65 @@ export function cleanupTraces(
 ): number {
   if (!existsSync(traceDirectory)) return 0;
 
-  const maxAgeMs = opts.maxAgeMs ?? DEFAULT_MAX_AGE_MS;
-  const maxFiles = opts.maxFiles ?? DEFAULT_MAX_FILES;
+  const maxTracesPerSkill = opts.maxTracesPerSkill ?? DEFAULT_MAX_TRACES_PER_SKILL;
+  const maxAgeMs = opts.maxAgeMs ?? 0;
   const now = Date.now();
 
-  // Collect all trace files with their stats.
-  const files: { name: string; path: string; mtimeMs: number }[] = [];
+  // Collect all trace files with their stats, grouped by skill.
+  const bySkill = new Map<string, { path: string; mtimeMs: number }[]>();
+
   for (const entry of readdirSync(traceDirectory)) {
     if (!entry.endsWith(".json")) continue;
     const fullPath = join(traceDirectory, entry);
     try {
       const stat = statSync(fullPath);
-      files.push({ name: entry, path: fullPath, mtimeMs: stat.mtimeMs });
+      const skillName = extractSkillName(entry);
+      if (!skillName) continue;
+
+      let group = bySkill.get(skillName);
+      if (!group) {
+        group = [];
+        bySkill.set(skillName, group);
+      }
+      group.push({ path: fullPath, mtimeMs: stat.mtimeMs });
     } catch {
       // File disappeared between readdir and stat — skip.
     }
   }
 
-  // Sort oldest first.
-  files.sort((a, b) => a.mtimeMs - b.mtimeMs);
-
   let deleted = 0;
 
-  // Phase 1: delete files older than maxAgeMs.
-  for (const f of files) {
-    if (now - f.mtimeMs <= maxAgeMs) break;
-    try {
-      unlinkSync(f.path);
-      deleted++;
-    } catch {
-      // Best-effort.
+  // Phase 1: optional age-based cleanup (delete files older than maxAgeMs).
+  if (maxAgeMs > 0) {
+    for (const files of bySkill.values()) {
+      for (let i = files.length - 1; i >= 0; i--) {
+        const f = files[i]!;
+        if (now - f.mtimeMs > maxAgeMs) {
+          try {
+            unlinkSync(f.path);
+            deleted++;
+            files.splice(i, 1);
+          } catch {
+            // Best-effort.
+          }
+        }
+      }
     }
   }
 
-  // Phase 2: if still over maxFiles, delete oldest until under cap.
-  if (maxFiles > 0) {
-    // Re-read remaining files after age-based cleanup.
-    const remaining: { path: string; mtimeMs: number }[] = [];
-    for (const entry of readdirSync(traceDirectory)) {
-      if (!entry.endsWith(".json")) continue;
-      const fullPath = join(traceDirectory, entry);
-      try {
-        const stat = statSync(fullPath);
-        remaining.push({ path: fullPath, mtimeMs: stat.mtimeMs });
-      } catch {
-        // skip
-      }
-    }
-    remaining.sort((a, b) => a.mtimeMs - b.mtimeMs);
+  // Phase 2: count-based retention per skill.
+  // Keep the newest `maxTracesPerSkill` files, delete the rest.
+  for (const files of bySkill.values()) {
+    if (files.length <= maxTracesPerSkill) continue;
 
-    while (remaining.length > maxFiles) {
-      const oldest = remaining.shift()!;
+    // Sort oldest first (lowest mtimeMs first).
+    files.sort((a, b) => a.mtimeMs - b.mtimeMs);
+
+    const toDelete = files.length - maxTracesPerSkill;
+    for (let i = 0; i < toDelete; i++) {
+      const f = files[i]!;
       try {
-        unlinkSync(oldest.path);
+        unlinkSync(f.path);
         deleted++;
       } catch {
         // Best-effort.

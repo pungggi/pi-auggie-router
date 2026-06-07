@@ -6,6 +6,8 @@
 
 **New to pi-auggie-router?** Start with the [Getting Started guide](GETTING-STARTED.md) for a step-by-step walkthrough of your first skill workflow.
 
+> **Installing via `pi install` (pi.dev bridge)?** Use the slash form `/skill <name>` — the colon form `/skill:<name>` falls through unintercepted under the extension bridge. See [Getting Started](GETTING-STARTED.md#bridge-limitations).
+
 `pi-auggie-router` intercepts `/skill:<name>` commands inside a Pi host,
 parses the matching `SKILL.md`, runs a 2-pass **Actor/Judge** brief loop
 against a cheap routing model, then dispatches the work to an isolated Pi
@@ -760,7 +762,8 @@ well-known skills:
     state machine resets to `idle`.
 11. **Trace persistence** — if `executionTrace.enabled`, the trace store is
     finalized with the sub-agent's output and persisted to `.pi/traces/`. Old
-    traces are cleaned up (7-day TTL, 500-file cap). A structured
+    traces are cleaned up by count-based per-skill retention (keep the newest
+    `maxTracesPerSkill`, default 20; oldest deleted first). A structured
     `auggie-router.execution-trace` log event is emitted.
 
 ## State machine

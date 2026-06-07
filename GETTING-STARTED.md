@@ -44,17 +44,25 @@ Other sources also accepted (`git:`, `https:`, local path) — see `pi install -
 
 ## Step 1: Verify the router is live
 
-On launch you should see three startup warnings from the bridge:
+On a current pi.dev build, launch is quiet. The one line that confirms the extension loaded is the system-prompt injection hook installing (info, not a warning):
 
 ```
-[pi-auggie-router/bridge] [warn] ExtensionAPI.setInputLocked() not found - falling back to sendMessage or stderr for input locking.
-[pi-auggie-router/bridge] [warn] onUserInput has limited support via extension bridge. /skill: interception may require pi.registerCommand fallback.
-[pi-auggie-router/bridge] [warn] onBeforeMessage is not supported via extension bridge. Q&A fallback will not work.
+[pi-auggie-router/bridge] [info] pi-auggie-router v1.4.0: installed system-prompt injection hook
 ```
 
-These confirm the extension loaded. They are expected — pi.dev's extension API does not currently expose the host hooks the router would prefer. Read [Bridge limitations](#bridge-limitations) below before going further.
+That hook auto-teaches the main agent the router's `/skill` conventions (correct invocation syntax, no pre-loading files, bridge limitations). It ships with the package and is **on by default** — opt out with `auggieRouter.promptInjection.enabled: false`. See [Auto-injected agent system prompt](README.md#auto-injected-agent-system-prompt) in the README.
 
-Then run:
+If pi.dev's `ExtensionAPI` is missing host hooks (older builds), the bridge logs degradation warnings at startup instead — and the injection hook is skipped:
+
+```
+[pi-auggie-router/bridge] [warn] ExtensionAPI.on() not available; system-prompt injection skipped. Update @earendil-works/pi-coding-agent to >=0.74.0.
+[pi-auggie-router/bridge] [warn] ExtensionAPI.on() not found — onUserInput interception unavailable. Use pi.registerCommand fallback.
+[pi-auggie-router/bridge] [warn] ExtensionAPI.on() not found — onBeforeMessage interception unavailable. Q&A fallback will not work.
+```
+
+These are expected on a bridge without full lifecycle hooks — see [Bridge limitations](#bridge-limitations) below. On a build that exposes `.on()` you won't see them at all.
+
+Either way, the reliable liveness check is the smoke test:
 
 ```
 /skill does-not-exist
@@ -79,13 +87,15 @@ The `/skill:<name>` (with colon) form **does not work** through the extension br
 
 pi.dev's `ExtensionAPI` does not expose every host hook the router would use if mounted directly. Three concrete consequences:
 
-| Warn at startup                   | What it means                                                                                                                          | Workaround                                                                                       |
-| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `setInputLocked() not found`      | Input box is **not** locked while a skill runs. You can keep typing — those messages will queue or interleave.                         | Cosmetic only. Don't type while a skill executes.                                                |
-| `onUserInput has limited support` | The `/skill:<name>` (colon) prefix cannot be intercepted before the model sees it.                                                     | Use `/skill <name>` (slash-command form). Same router, just a different entry path.              |
-| `onBeforeMessage not supported`   | The Q&A clarification fallback (Judge → user → resume execution) cannot capture your reply. If the Judge needs clarification, it dies. | Write skills tight enough that the Judge passes on the first try. See troubleshooting below.     |
+| Limitation                                | What it means                                                                                                                          | Workaround                                                                                       |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Input box not locked (`setInputLocked` no-ops) | Input box is **not** locked while a skill runs. You can keep typing — those messages will queue or interleave. No startup warning is emitted; the lock call silently no-ops. | Cosmetic only. Don't type while a skill executes.                                                |
+| `onUserInput` interception unavailable (warns only when `.on()` is missing) | The `/skill:<name>` (colon) prefix cannot be intercepted before the model sees it.                                                     | Use `/skill <name>` (slash-command form). Same router, just a different entry path.              |
+| `onBeforeMessage` interception unavailable (warns only when `.on()` is missing) | The Q&A clarification fallback (Judge → user → resume execution) cannot capture your reply. If the Judge needs clarification, it dies. | Write skills tight enough that the Judge passes on the first try. See troubleshooting below.     |
 
-These limitations are pi.dev-side; the router itself supports all three hooks via the `PiHost` contract when mounted directly. If/when pi-coding-agent grows full extension hooks, the warns disappear.
+These limitations are pi.dev-side; the router itself supports all three hooks via the `PiHost` contract when mounted directly. On a bridge that exposes `.on()`, the two interception warnings don't fire (and the prompt-injection hook installs — see Step 1). If/when pi-coding-agent grows full extension hooks, the rest disappear too.
+
+The auto-injected system prompt (Step 1) softens the colon-vs-slash trap in practice: the main agent is told up front to always use `/skill <name>` and to treat any `/skill:<name>` in its own output as a bug. The limitation still exists at the bridge level — the injection just makes the agent avoid tripping it.
 
 ## Step 2: Configure (optional)
 

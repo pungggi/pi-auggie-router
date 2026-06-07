@@ -8,40 +8,47 @@
 
 > **Installing via `pi install` (pi.dev bridge)?** Use the slash form `/skill <name>` — the colon form `/skill:<name>` falls through unintercepted under the extension bridge. See [Getting Started](GETTING-STARTED.md#bridge-limitations).
 
-`pi-auggie-router` intercepts `/skill:<name>` commands inside a Pi host,
-parses the matching `SKILL.md`, runs a 2-pass **Actor/Judge** brief loop
-against a cheap routing model, then dispatches the work to an isolated Pi
-sub-agent that is forced to retrieve workspace context through Augment Code's
-`codebase-retrieval` MCP tool. The main thread stays clean — the user sees
-their command and the synthesized result, nothing else.
+`pi-auggie-router` intercepts `/skill:<name>` commands, parses the matching
+`SKILL.md`, runs a 2-pass **Actor/Judge** brief loop on a cheap routing model,
+then dispatches to an isolated Pi sub-agent forced to retrieve workspace
+context through Augment Code's `codebase-retrieval` MCP tool. The main thread
+stays clean — user sees their command and the synthesized result, nothing else.
+
+## Contents
+
+- [Why](#why)
+- [Installation](#installation)
+- [Mounting it inside a Pi host](#mounting-it-inside-a-pi-host)
+- [Configuration](#configuration)
+- [Adaptive Execution Model Routing](#adaptive-execution-model-routing)
+- [Final-output sanitization](#final-output-sanitization)
+- [Auto-injected agent system prompt](#auto-injected-agent-system-prompt)
+- [Context budgets by execution tier](#context-budgets-by-execution-tier)
+- [Chat-history assembly](#chat-history-assembly)
+- [Prompt-prefix cache stability](#prompt-prefix-cache-stability)
+- [Overflow context memory](#overflow-context-memory)
+- [Parallel sub-agent runner API](#parallel-sub-agent-runner-api)
+- [Execution trace persistence](#execution-trace-persistence)
+- [Trace Observability](#trace-observability)
+- [Execution flow](#execution-flow)
+- [State machine](#state-machine)
+- [Operational defaults](#operational-defaults)
+- [Security model](#security-model)
+- [Development](#development)
 
 ## Why
 
 Out of the box, `/skill` execution dumps full file blobs into context, blows
-out token budgets, and produces inconsistent retrieval. This router takes the
-opposite stance: a single hardcoded path through Augment's semantic engine,
-strict timeouts, and a payload ceiling that forces the model to refine its
-own queries instead of vomiting megabytes back into the loop.
+out token budgets, and produces inconsistent retrieval. This router forces a
+single hardcoded path through Augment's semantic engine, strict timeouts, and
+a payload ceiling that makes the model refine its queries instead of dumping
+megabytes back into the loop.
 
-This package is **vendor-locked on purpose**. It will not run without a
-working local `auggie` install.
+**Vendor-locked on purpose** — will not run without a working local `auggie`
+install.
 
-The main agent learns how to use the router automatically — the
-extension installs a `before_agent_start` hook that injects a
-versioned `## pi-auggie-router` block into the system prompt on
-every turn, so the agent picks the right skill, uses the correct
-invocation syntax, and respects the bridge limitations without any
-user-side configuration. See [Auto-injected agent system
-prompt](#auto-injected-agent-system-prompt) for details and opt-out.
-
-## Installation
-
-```bash
-npm install pi-auggie-router
-```
-
-Requires Node ≥ 20.6 and a working [Augment Code CLI](https://www.augmentcode.com/)
-(`auggie account status` must exit 0).
+The main agent learns the router automatically via an injected system-prompt
+block. See [Auto-injected agent system prompt](#auto-injected-agent-system-prompt).
 
 ## Mounting it inside a Pi host
 
@@ -56,19 +63,19 @@ router.dispose();
 
 `piHost` must satisfy the `PiHost` contract exported from this package:
 
-| Method                  | Purpose                                                                 |
-| ----------------------- | ----------------------------------------------------------------------- |
-| `postSystemMessage`     | Append `[System]: …` lines to the visible thread.                       |
-| `postAssistantMessage`  | Append the sub-agent's final synthesized output to the thread.          |
-| `setInputLocked`        | Disable / re-enable the user's main editor while a skill runs.          |
-| `getRecentMessages(n)`  | Return the last `n` chat messages for Actor brief assembly.             |
-| `callLLM(opts)`         | Cheap routing-class call used by Actor + Judge.                         |
-| `runSubAgent(opts)`     | Spin up an isolated Pi agent with MCP servers + middleware attached.    |
-| `onUserInput(cb)`       | Invoked for every user input; return `{cancel:true}` to swallow.        |
-| `onBeforeMessage(cb)`   | Invoked before a typed message is sent; used for the Q&A fallback.      |
-| `resolveWorkspacePath`  | Resolve paths inside the active workspace (for `.pi/skills/...`).       |
-| `resolveHomePath`       | Resolve paths inside `~` (for `~/.pi/agent/skills/...`).                |
-| `log` (optional)        | Structured logger.                                                      |
+| Method                 | Purpose                                                              |
+| ---------------------- | -------------------------------------------------------------------- |
+| `postSystemMessage`    | Append `[System]: …` lines to the visible thread.                    |
+| `postAssistantMessage` | Append the sub-agent's final synthesized output to the thread.       |
+| `setInputLocked`       | Disable / re-enable the user's main editor while a skill runs.       |
+| `getRecentMessages(n)` | Return the last `n` chat messages for Actor brief assembly.          |
+| `callLLM(opts)`        | Cheap routing-class call used by Actor + Judge.                      |
+| `runSubAgent(opts)`    | Spin up an isolated Pi agent with MCP servers + middleware attached. |
+| `onUserInput(cb)`      | Invoked for every user input; return `{cancel:true}` to swallow.     |
+| `onBeforeMessage(cb)`  | Invoked before a typed message is sent; used for the Q&A fallback.   |
+| `resolveWorkspacePath` | Resolve paths inside the active workspace (for `.pi/skills/...`).    |
+| `resolveHomePath`      | Resolve paths inside `~` (for `~/.pi/agent/skills/...`).             |
+| `log` (optional)       | Structured logger.                                                   |
 
 ## Configuration
 
@@ -167,18 +174,16 @@ change in normal use; everything else is opinionated for a reason.
 
 ## Adaptive Execution Model Routing
 
-By default, the router resolves the execution model from the `SKILL.md`
-`model:` frontmatter field (or a built-in fallback). This means easy tasks
-and hard tasks run on the same static model.
+By default the router resolves the execution model from `SKILL.md` `model:`
+(or a fallback) — easy and hard tasks run on the same static model.
 
-Adaptive execution routing adds a lightweight model-selection step: after the
-Actor/Judge loop classifies the task by complexity and risk, the router picks
-an appropriate model from a configurable **cheap / balanced / frontier** pool.
-The selection is **sticky** for the entire `/skill` run — one model is chosen
-before the sub-agent starts and never changes mid-execution.
+Adaptive routing adds a model-selection step: after the Actor/Judge loop
+classifies the task by complexity and risk, the router picks from a
+configurable **cheap / balanced / frontier** pool. The choice is **sticky**
+for the whole run — selected before the sub-agent starts, never changed
+mid-execution.
 
-**Disabled by default.** Existing behavior is preserved unless you explicitly
-opt in.
+**Disabled by default.**
 
 ### Enabling adaptive routing
 
@@ -211,26 +216,26 @@ Omitted fields use the defaults shown in the main configuration block above.
 
 ### Settings
 
-| Setting | Values | Default | Purpose |
-| --- | --- | --- | --- |
-| `enabled` | `true` / `false` | `false` | Turn adaptive routing on. |
-| `preference` | `preferCheap` / `balanced` / `preferBest` | `balanced` | Cost-vs-quality bias. |
-| `surfaceDecision` | `true` / `false` | `false` | Show the selected model in the `[System]` execution message. Routed decisions include tier; pinned/fallback decisions name their source. |
-| `skillModelPolicy` | `pin` / `ignore` | `pin` | How `SKILL.md` `model:` interacts with routing. |
-| `models.cheap` | model ID | `anthropic/claude-3-5-haiku` | Model for read-only / low-complexity tasks. |
-| `models.balanced` | model ID | `anthropic/claude-3-5-sonnet` | Model for scoped edits and medium-complexity tasks. |
-| `models.frontier` | model ID | `anthropic/claude-3-7-sonnet` | Model for multi-file / architecture / high-risk tasks. |
+| Setting            | Values                                    | Default                       | Purpose                                                                                                                                  |
+| ------------------ | ----------------------------------------- | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`          | `true` / `false`                          | `false`                       | Turn adaptive routing on.                                                                                                                |
+| `preference`       | `preferCheap` / `balanced` / `preferBest` | `balanced`                    | Cost-vs-quality bias.                                                                                                                    |
+| `surfaceDecision`  | `true` / `false`                          | `false`                       | Show the selected model in the `[System]` execution message. Routed decisions include tier; pinned/fallback decisions name their source. |
+| `skillModelPolicy` | `pin` / `ignore`                          | `pin`                         | How `SKILL.md` `model:` interacts with routing.                                                                                          |
+| `models.cheap`     | model ID                                  | `anthropic/claude-3-5-haiku`  | Model for read-only / low-complexity tasks.                                                                                              |
+| `models.balanced`  | model ID                                  | `anthropic/claude-3-5-sonnet` | Model for scoped edits and medium-complexity tasks.                                                                                      |
+| `models.frontier`  | model ID                                  | `anthropic/claude-3-7-sonnet` | Model for multi-file / architecture / high-risk tasks.                                                                                   |
 
 All configured model IDs pass through `mapModel(...)` so `defaultProvider`
 and `allowedProviderPrefixes` continue to apply.
 
 ### Preference adjustment
 
-| Preference | Behavior |
-| --- | --- |
-| `balanced` | Use the base tier chosen by the Judge. |
+| Preference    | Behavior                                                                                                                                                 |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `balanced`    | Use the base tier chosen by the Judge.                                                                                                                   |
 | `preferCheap` | Downgrade `balanced` → `cheap` when complexity is `medium`, risk is `read_only` or `small_edit`, and confidence ≥ 0.7. Never downgrades high-risk tasks. |
-| `preferBest` | Upgrade cheap edit tasks to `balanced`. Upgrade unknown-risk tasks to `frontier`. |
+| `preferBest`  | Upgrade cheap edit tasks to `balanced`. Upgrade unknown-risk tasks to `frontier`.                                                                        |
 
 ### Safety floors (always enforced)
 
@@ -243,10 +248,10 @@ Regardless of preference:
 
 ### Skill model policy
 
-| Policy | Behavior |
-| --- | --- |
-| `pin` | If `SKILL.md` has `model:`, use it exactly as before. Only tasks without a pinned model go through adaptive routing. **Safest default.** |
-| `ignore` | Ignore `SKILL.md` `model:` and always route from the pool. Useful for team-level cost control. |
+| Policy   | Behavior                                                                                                                                 |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `pin`    | If `SKILL.md` has `model:`, use it exactly as before. Only tasks without a pinned model go through adaptive routing. **Safest default.** |
+| `ignore` | Ignore `SKILL.md` `model:` and always route from the pool. Useful for team-level cost control.                                           |
 
 ### Missing pool entries
 
@@ -301,9 +306,9 @@ No user prompt content, chat history, or secrets are logged.
 
 ### Security-relevant settings
 
-| Setting | Default | Purpose |
-| --- | --- | --- |
-| `auggieBinPath` | `"auggie"` | Absolute path to the `auggie` binary. Override to avoid `$PATH` lookup attacks in shared environments. |
+| Setting                   | Default          | Purpose                                                                                                                                             |
+| ------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `auggieBinPath`           | `"auggie"`       | Absolute path to the `auggie` binary. Override to avoid `$PATH` lookup attacks in shared environments.                                              |
 | `allowedProviderPrefixes` | `[]` (allow all) | Non-empty array restricts which provider prefixes a SKILL `model:` field may resolve to. E.g. `["openrouter"]` blocks `evil-provider/vendor/model`. |
 
 All numeric settings are validated within safe ranges; invalid values are silently
@@ -314,12 +319,12 @@ dropped and a warning is logged. See source (`config.ts`) for exact bounds.
 The `model:` field in a skill's frontmatter is translated through
 `mapModel(rawModel, defaultProvider, allowedProviderPrefixes)`:
 
-| Frontmatter `model`                       | Resolved gateway ID                                |
-| ----------------------------------------- | -------------------------------------------------- |
-| `claude-3-7-sonnet`                       | `openrouter/anthropic/claude-3-7-sonnet`           |
-| `anthropic/claude-3-5-haiku`              | `openrouter/anthropic/claude-3-5-haiku`            |
-| `openrouter/anthropic/claude-3-5-sonnet`  | _(unchanged — already fully qualified)_            |
-| _(missing)_                               | `openrouter/anthropic/claude-3-5-sonnet` (fallback)|
+| Frontmatter `model`                      | Resolved gateway ID                                 |
+| ---------------------------------------- | --------------------------------------------------- |
+| `claude-3-7-sonnet`                      | `openrouter/anthropic/claude-3-7-sonnet`            |
+| `anthropic/claude-3-5-haiku`             | `openrouter/anthropic/claude-3-5-haiku`             |
+| `openrouter/anthropic/claude-3-5-sonnet` | _(unchanged — already fully qualified)_             |
+| _(missing)_                              | `openrouter/anthropic/claude-3-5-sonnet` (fallback) |
 
 When `allowedProviderPrefixes` is set (e.g. `["openrouter"]`), a fully-qualified
 model whose provider prefix isn't in the list throws `DisallowedProviderError` and
@@ -328,16 +333,15 @@ to an untrusted provider.
 
 ## Final-output sanitization
 
-The router sanitizes the sub-agent's final text before posting it to the main
-thread. This keeps internal tool traces, MCP envelopes, and runaway retrieval
-dumps out of the user's chat history — which also keeps future `historyWindow`
-slices clean.
+The router sanitizes the sub-agent's final text before posting it, keeping
+internal tool traces, MCP envelopes, and runaway retrieval dumps out of chat
+history (and out of future `historyWindow` slices).
 
-| Setting | Default | Purpose |
-| --- | --- | --- |
-| `outputSanitizer.enabled` | `true` | Master switch. When `false`, sub-agent output passes through unchanged. |
-| `outputSanitizer.finalOutputMaxChars` | `120000` | Hard cap on final answer characters. The truncation marker counts against the budget. Set to `0` to disable the cap. |
-| `outputSanitizer.stripToolTraces` | `true` | Remove fenced blocks labeled `tool_use`, `tool_result`, `mcp`, `codebase-retrieval`, `auggie`, `scratchpad`, `internal` (and `-`/`_` variants), plus bare `{"jsonrpc":...}` / `{"tool_use_id":...}` / `{"tool_call_id":...}` lines. |
+| Setting                               | Default  | Purpose                                                                                                                                                                                                                             |
+| ------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `outputSanitizer.enabled`             | `true`   | Master switch. When `false`, sub-agent output passes through unchanged.                                                                                                                                                             |
+| `outputSanitizer.finalOutputMaxChars` | `120000` | Hard cap on final answer characters. The truncation marker counts against the budget. Set to `0` to disable the cap.                                                                                                                |
+| `outputSanitizer.stripToolTraces`     | `true`   | Remove fenced blocks labeled `tool_use`, `tool_result`, `mcp`, `codebase-retrieval`, `auggie`, `scratchpad`, `internal` (and `-`/`_` variants), plus bare `{"jsonrpc":...}` / `{"tool_use_id":...}` / `{"tool_call_id":...}` lines. |
 
 The sanitizer is conservative: legitimate `ts`, `js`, `json`, `py`, `sh`, etc.
 fenced code blocks are preserved. A bare `{"type":...}` JSON line is **not**
@@ -360,113 +364,35 @@ Removed content is **never** logged.
 
 ## Auto-injected agent system prompt
 
-Skills are registered as ordinary Pi commands — the main agent can see
-them in its command palette — but out of the box the main agent has no
-idea that `/skill <name>` is the *preferred* way to do focused work,
-that `/skill:<name>` (colon form) silently falls through as plain text,
-or that the extension bridge leaves the input unlocked while a skill
-runs. Without those rules, the agent falls back to inline handling,
-re-reads files into context, and occasionally types the colon form
-thinking it's the canonical syntax.
+The extension installs a `before_agent_start` hook that appends a
+versioned `## pi-auggie-router` block to the system prompt on every
+turn. This teaches the main agent to: delegate to skills vs. work
+inline, use `/skill <name>` (never the colon form), write good task
+descriptions, respect the three bridge limitations, and surface
+`[System Error]:` lines verbatim. Without it the agent falls back to
+inline handling and re-reads files into context.
 
-To make the main agent use the router correctly without requiring every
-user to maintain a hand-written `APPEND_SYSTEM.md`, the extension
-**versioned with this package** installs a `before_agent_start` hook
-that appends a `## pi-auggie-router` block to the system prompt on
-every turn. The block content lives in
+The block is a string constant in
 [`src/agentPrompt.ts`](src/agentPrompt.ts) (compiled to
-`dist/agentPrompt.js`) and ships with the package — when you run
-`npm update pi-auggie-router`, the rules update automatically. No
-user-side maintenance required.
+`dist/agentPrompt.js`), shipped with the package — `npm update
+pi-auggie-router` ships new rules automatically, no file to maintain.
+It's appended after Pi's default prompt, alongside whatever else Pi
+loaded (AGENTS.md, context files, your own APPEND_SYSTEM.md), and is
+identical every turn. Inspect it via `import { AGENT_PROMPT_BLOCK }
+from "pi-auggie-router"`.
 
-The injected block teaches the agent:
+**Disable:** set `auggieRouter.promptInjection.enabled: false` in
+`.pi/settings.json` (workspace) or `~/.pi/settings.json` (global). The
+agent then sees only Pi's default prompt; teach it your own rules via
+`.pi/APPEND_SYSTEM.md` or `~/.pi/agent/APPEND_SYSTEM.md` if you want.
 
-- **When to delegate** to a skill vs. doing the work inline
-- **Correct invocation syntax** (`/skill <name> <task>`, never
-  `/skill:<name>`)
-- **Hard rules** — don't pre-load files, don't re-execute the
-  sub-agent's work, don't invoke the picker UI, don't invoke the
-  trace commands on the user's behalf
-- **How to write a good task description** (specific file path,
-  desired outcome, constraints — these feed the Actor/Judge brief
-  loop)
-- **The three bridge limitations** to respect (input not locked,
-  Q&A fallback broken, tool traces stripped)
-- **Failure handling** — surface `[System Error]: ...` lines
-  verbatim, suggest concrete next steps, never silently retry
+**Why a hook, not a bootstrapped `APPEND_SYSTEM.md`?** A file drifts
+out of sync on upgrade, and since Pi auto-loads `APPEND_SYSTEM.md` the
+rules would appear twice. The hook is the single injection point.
 
-### What the agent sees
-
-The block is injected after Pi's default prompt is fully assembled,
-so the agent receives it in addition to whatever else Pi has loaded
-(AGENTS.md, context files, the user's own APPEND_SYSTEM.md, etc.).
-The block is identical on every turn — there's no per-session
-diversification, no rotation, no LLM-generated variations.
-
-### Versioning and updates
-
-The block is a string constant in the package source. When the rules
-change:
-
-1. The string in `src/agentPrompt.ts` is updated.
-2. A new version of `pi-auggie-router` is published.
-3. Users run `npm update pi-auggie-router` (or
-   `pi update pi-auggie-router`).
-4. The next agent turn picks up the new rules. No restart, no
-   config edit, no manual file sync.
-
-### Source of truth — and how to inspect it
-
-The block is plain text in
-[`src/agentPrompt.ts`](src/agentPrompt.ts):
-
-```ts
-import { AGENT_PROMPT_BLOCK } from "pi-auggie-router";
-console.log(AGENT_PROMPT_BLOCK);
-```
-
-Or after install, peek at the compiled file:
-
-```bash
-cat node_modules/pi-auggie-router/dist/agentPrompt.js | head -80
-```
-
-### Disabling the injection
-
-To opt out, set `auggieRouter.promptInjection.enabled` to `false` in
-`.pi/settings.json` (workspace) or `~/.pi/settings.json` (global):
-
-```json
-{
-  "auggieRouter": {
-    "promptInjection": {
-      "enabled": false
-    }
-  }
-}
-```
-
-With the hook disabled, the agent sees only the default Pi system
-prompt. You can still teach it the router's conventions by writing
-your own rules into `.pi/APPEND_SYSTEM.md` (project) or
-`~/.pi/agent/APPEND_SYSTEM.md` (global).
-
-### Why not just write a `~/.pi/agent/APPEND_SYSTEM.md`?
-
-Two reasons:
-
-1. **No user maintenance.** A hand-written file drifts out of sync
-   with the router's actual behavior as the package is upgraded. A
-   versioned block in the package source never drifts.
-2. **No duplication.** Pi auto-loads `APPEND_SYSTEM.md` files. If we
-   *also* injected the same content via the hook, the rules would
-   appear twice in the system prompt. The hook is the single
-   injection point.
-
-If you want a visible file you can edit, the block source is
-[`src/agentPrompt.ts`](src/agentPrompt.ts) — copy from there into
-your own `APPEND_SYSTEM.md` and disable the hook. You now have a
-hand-maintained copy that the router respects but does not duplicate.
+**Uninstalling:** the block is never written to disk. Uninstalling
+unregisters the hook, so the next run sees the unmodified base prompt.
+Nothing to clean up.
 
 ## Context budgets by execution tier
 
@@ -476,12 +402,12 @@ is selected from a per-tier pool instead of the static top-level
 than a high-risk architecture refactor. The selected ceiling is sticky for the
 whole sub-agent run.
 
-| Setting | Default | Purpose |
-| --- | --- | --- |
-| `contextBudgets.enabled` | `false` | Master switch. When `false`, the top-level `overflowCeilingBytes` is used as before. |
-| `contextBudgets.overflowCeilingBytes.cheap` | `15000` | Ceiling for read-only / low-complexity work. |
-| `contextBudgets.overflowCeilingBytes.balanced` | `25000` | Ceiling for scoped edits / medium-complexity work. |
-| `contextBudgets.overflowCeilingBytes.frontier` | `50000` | Ceiling for multi-file / architecture / high-risk work. |
+| Setting                                        | Default | Purpose                                                                              |
+| ---------------------------------------------- | ------- | ------------------------------------------------------------------------------------ |
+| `contextBudgets.enabled`                       | `false` | Master switch. When `false`, the top-level `overflowCeilingBytes` is used as before. |
+| `contextBudgets.overflowCeilingBytes.cheap`    | `15000` | Ceiling for read-only / low-complexity work.                                         |
+| `contextBudgets.overflowCeilingBytes.balanced` | `25000` | Ceiling for scoped edits / medium-complexity work.                                   |
+| `contextBudgets.overflowCeilingBytes.frontier` | `50000` | Ceiling for multi-file / architecture / high-risk work.                              |
 
 **Tier selection rule.** When adaptive execution routing produced the model
 (`selection.source === "execution-routing"`), the model's tier drives the
@@ -517,26 +443,24 @@ section for the (separate) history-assembly knob.
 
 ## Chat-history assembly
 
-The Actor/Judge loop pulls recent messages via `host.getRecentMessages(historyWindow)`.
-With long sessions, the earliest goal-setting messages can fall out of the
-window — increasing `historyWindow` solves that but bloats every routing call.
+The Actor/Judge loop pulls recent messages via `getRecentMessages(historyWindow)`.
+In long sessions early goal-setting messages fall out of the window; raising
+`historyWindow` fixes that but bloats every routing call. `historyAssembly` adds
+an explicit reducer between `getRecentMessages` and brief construction:
 
-`historyAssembly` provides an explicit reducer between `getRecentMessages` and
-brief construction. Two strategies:
+| Strategy           | Behaviour                                                                                                                                                          |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `recent` (default) | Pass the host-provided window through unchanged. Legacy behaviour.                                                                                                 |
+| `headTail`         | Keep the first `headMessages` and last `tailMessages` of the window. Drop the middle or replace it with an explicit marker. Apply per-message and total char caps. |
 
-| Strategy | Behaviour |
-| --- | --- |
-| `recent` (default) | Pass the host-provided window through unchanged. Legacy behaviour. |
-| `headTail` | Keep the first `headMessages` and last `tailMessages` of the window. Drop the middle or replace it with an explicit marker. Apply per-message and total char caps. |
-
-| Setting | Default | Purpose |
-| --- | --- | --- |
-| `historyAssembly.strategy` | `"recent"` | `"recent"` or `"headTail"`. |
-| `historyAssembly.headMessages` | `2` | Leading messages preserved (only used by `headTail`). |
-| `historyAssembly.tailMessages` | `12` | Trailing messages preserved (only used by `headTail`). |
-| `historyAssembly.middleMode` | `"marker"` | `"marker"` inserts a `[history-omitted-middle: N message(s), ~M chars]` system message; `"omit"` drops the middle silently. |
-| `historyAssembly.maxCharsPerMessage` | `10000` | Per-message char cap. `0` disables. |
-| `historyAssembly.maxTotalChars` | `60000` | Total assembled char cap. `0` disables. |
+| Setting                              | Default    | Purpose                                                                                                                     |
+| ------------------------------------ | ---------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `historyAssembly.strategy`           | `"recent"` | `"recent"` or `"headTail"`.                                                                                                 |
+| `historyAssembly.headMessages`       | `2`        | Leading messages preserved (only used by `headTail`).                                                                       |
+| `historyAssembly.tailMessages`       | `12`       | Trailing messages preserved (only used by `headTail`).                                                                      |
+| `historyAssembly.middleMode`         | `"marker"` | `"marker"` inserts a `[history-omitted-middle: N message(s), ~M chars]` system message; `"omit"` drops the middle silently. |
+| `historyAssembly.maxCharsPerMessage` | `10000`    | Per-message char cap. `0` disables.                                                                                         |
+| `historyAssembly.maxTotalChars`      | `60000`    | Total assembled char cap. `0` disables.                                                                                     |
 
 **Total-cap eviction order** when content exceeds `maxTotalChars`:
 
@@ -595,9 +519,9 @@ an accidental cache-busting regression.
 ## Overflow context memory
 
 By default, oversized Auggie `codebase-retrieval` payloads are blocked and the
-sub-agent is told to refine its query. When `contextMemory.enabled` is `true`,
-those oversized payloads are instead stored in an execution-scoped temp store
-and the replacement message includes:
+sub-agent told to refine its query. When `contextMemory.enabled` is `true`, the
+payload is instead stored in an execution-scoped temp store and the replacement
+message includes:
 
 - an overflow handle such as `overflow_1`,
 - the original byte size,
@@ -606,9 +530,9 @@ and the replacement message includes:
 During the same sub-agent run, the router attaches a small `context-memory` MCP
 server with two tools:
 
-| Tool | Purpose |
-| --- | --- |
-| `context-memory.list` | List stored overflow entries by metadata only. |
+| Tool                  | Purpose                                                     |
+| --------------------- | ----------------------------------------------------------- |
+| `context-memory.list` | List stored overflow entries by metadata only.              |
 | `context-memory.read` | Read a bounded character slice for a known overflow handle. |
 
 The MCP read surface is intentionally narrow: `context-memory.read` caps each
@@ -616,32 +540,31 @@ slice at 32 000 characters and accepts only generated handles matching
 `overflow_<n>`. The temp store is disposed after the sub-agent resolves or
 rejects, so there is no cross-run memory.
 
-| Setting | Default | Purpose |
-| --- | --- | --- |
-| `contextMemory.enabled` | `false` | Master switch. When `false`, legacy overflow replacement text is used. |
-| `contextMemory.maxEntries` | `8` | Maximum stored overflow payloads per skill execution. |
-| `contextMemory.maxBytesPerRun` | `1000000` | Cumulative byte cap per skill execution. |
-| `contextMemory.previewHeadChars` | `4000` | Characters from the beginning included in the replacement preview. |
-| `contextMemory.previewTailChars` | `4000` | Characters from the end included in the replacement preview. |
+| Setting                          | Default   | Purpose                                                                |
+| -------------------------------- | --------- | ---------------------------------------------------------------------- |
+| `contextMemory.enabled`          | `false`   | Master switch. When `false`, legacy overflow replacement text is used. |
+| `contextMemory.maxEntries`       | `8`       | Maximum stored overflow payloads per skill execution.                  |
+| `contextMemory.maxBytesPerRun`   | `1000000` | Cumulative byte cap per skill execution.                               |
+| `contextMemory.previewHeadChars` | `4000`    | Characters from the beginning included in the replacement preview.     |
+| `contextMemory.previewTailChars` | `4000`    | Characters from the end included in the replacement preview.           |
 
 ## Parallel sub-agent runner API
 
-`runParallelSubagents(...)` is exported for hosts or advanced integrations that
-want to split an already-known task into explicit independent subtasks. The
-main `/skill` router does not automatically decompose user requests.
+`runParallelSubagents(...)` is exported for hosts that want to split an
+already-known task into explicit independent subtasks. The main `/skill` router
+does not auto-decompose requests.
 
-The feature is disabled by default and refuses to run unless
-`parallelSubagents.enabled=true`. Each worker sub-agent receives the same stable
-skill system prompt plus one compact subtask brief in its user prompt, its own
-Auggie MCP stack, and isolated context-memory plumbing when enabled. Worker
-outputs are capped before deterministic synthesis, so no extra LLM call is
-needed to combine results.
+Disabled by default; refuses to run unless `parallelSubagents.enabled=true`.
+Each worker gets the same stable skill system prompt plus one compact subtask
+brief, its own Auggie MCP stack, and isolated context-memory plumbing when
+enabled. Worker outputs are capped, then synthesized deterministically — no
+extra LLM call to combine.
 
-| Setting | Default | Purpose |
-| --- | --- | --- |
-| `parallelSubagents.enabled` | `false` | Master switch for the explicit runner API. |
-| `parallelSubagents.maxSubagents` | `3` | Maximum concurrent workers allowed by settings. Caller overrides are bounded by this cap. |
-| `parallelSubagents.perWorkerOutputCharCap` | `8000` | Default cap for each worker's final text. `0` disables the cap. |
+| Setting                                    | Default | Purpose                                                                                   |
+| ------------------------------------------ | ------- | ----------------------------------------------------------------------------------------- |
+| `parallelSubagents.enabled`                | `false` | Master switch for the explicit runner API.                                                |
+| `parallelSubagents.maxSubagents`           | `3`     | Maximum concurrent workers allowed by settings. Caller overrides are bounded by this cap. |
+| `parallelSubagents.perWorkerOutputCharCap` | `8000`  | Default cap for each worker's final text. `0` disables the cap.                           |
 
 ## Execution trace persistence
 
@@ -659,11 +582,11 @@ This data powers **trace observability** for skill debugging (see
 classifying trace outcomes, detecting skill degradation, and surfacing
 actionable reports to users.
 
-| Setting | Default | Purpose |
-| --- | --- | --- |
-| `executionTrace.enabled` | `true` | Master switch for trace capture and persistence. |
-| `executionTrace.maxResultPreviewChars` | `2000` | Max characters kept from each tool result in the trace. Full payloads are not stored (could be megabytes of codebase content). |
-| `executionTrace.traceDirectory` | `".pi/traces"` | Directory (relative to workspace root) where trace JSON files are stored. |
+| Setting                                | Default        | Purpose                                                                                                                        |
+| -------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `executionTrace.enabled`               | `true`         | Master switch for trace capture and persistence.                                                                               |
+| `executionTrace.maxResultPreviewChars` | `2000`         | Max characters kept from each tool result in the trace. Full payloads are not stored (could be megabytes of codebase content). |
+| `executionTrace.traceDirectory`        | `".pi/traces"` | Directory (relative to workspace root) where trace JSON files are stored.                                                      |
 
 Old traces are automatically cleaned up after each run: count-based retention
 keeps at most `maxTracesPerSkill` (default 20) trace files per skill, deleting
@@ -673,32 +596,31 @@ cleanup manually.
 ## Trace Observability
 
 When `traceObservability.enabled` is `true` (the default), the router adds a
-lightweight observability layer on top of execution traces:
-
-classifying outcomes, detecting degradation, and surfacing actionable reports.
+lightweight layer on top of execution traces: classifying outcomes, detecting
+degradation, and surfacing actionable reports.
 
 ### Commands
 
-| Command | Purpose |
-| --- | --- |
-| `/skill:trace-report <name>` | Show a summary report for a skill's recent execution history — outcome distribution, common failure signals, trend line, and recent traces. |
-| `/skill:trace-view <filename>` | Show a detailed tool-call timeline for a single trace file — timestamps, args, result sizes, duration, and final text. |
+| Command                        | Purpose                                                                                                                                     |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/skill:trace-report <name>`   | Show a summary report for a skill's recent execution history — outcome distribution, common failure signals, trend line, and recent traces. |
+| `/skill:trace-view <filename>` | Show a detailed tool-call timeline for a single trace file — timestamps, args, result sizes, duration, and final text.                      |
 
 These commands are intercepted before Pi's default `/skill` handler runs.
 
 ### Settings
 
-| Setting | Default | Purpose |
-| --- | --- | --- |
-| `traceObservability.enabled` | `true` | Master switch for classification, degradation alerts, and reports. |
-| `traceObservability.showReportAfterExecution` | `false` | Show a compact mini-report (last 3 traces) after every skill execution. |
-| `traceObservability.degradationAlertEnabled` | `true` | Emit a system message when a skill fails N consecutive times after prior success. |
-| `traceObservability.degradationConsecutiveFailures` | `3` | Consecutive failures required to trigger a degradation alert. |
-| `traceObservability.degradationAlertCooldownHours` | `24` | Minimum hours between repeated alerts for the same skill. |
-| `traceObservability.reportMaxTraces` | `10` | Maximum traces loaded and classified for on-demand reports. |
-| `traceObservability.reportMaxInlineTraces` | `5` | Maximum recent traces shown inline; larger datasets truncate with a count. |
-| `traceObservability.regressionWindowSize` | `10` | Number of historical traces examined for regression detection. |
-| `traceObservability.maxTracesPerSkill` | `20` | Maximum trace files retained per skill (count-based cleanup, oldest deleted first). |
+| Setting                                             | Default | Purpose                                                                             |
+| --------------------------------------------------- | ------- | ----------------------------------------------------------------------------------- |
+| `traceObservability.enabled`                        | `true`  | Master switch for classification, degradation alerts, and reports.                  |
+| `traceObservability.showReportAfterExecution`       | `false` | Show a compact mini-report (last 3 traces) after every skill execution.             |
+| `traceObservability.degradationAlertEnabled`        | `true`  | Emit a system message when a skill fails N consecutive times after prior success.   |
+| `traceObservability.degradationConsecutiveFailures` | `3`     | Consecutive failures required to trigger a degradation alert.                       |
+| `traceObservability.degradationAlertCooldownHours`  | `24`    | Minimum hours between repeated alerts for the same skill.                           |
+| `traceObservability.reportMaxTraces`                | `10`    | Maximum traces loaded and classified for on-demand reports.                         |
+| `traceObservability.reportMaxInlineTraces`          | `5`     | Maximum recent traces shown inline; larger datasets truncate with a count.          |
+| `traceObservability.regressionWindowSize`           | `10`    | Number of historical traces examined for regression detection.                      |
+| `traceObservability.maxTracesPerSkill`              | `20`    | Maximum trace files retained per skill (count-based cleanup, oldest deleted first). |
 
 ### Skip-Judge mode
 
@@ -733,7 +655,7 @@ well-known skills:
    clarification, and execution resumes.
 5. **Auggie pre-flight** — `auggie account status` is spawned silently. Any non-zero
    exit aborts with `[System Error]: Cannot execute skill. Augment daemon is
-   offline or unauthenticated.`
+offline or unauthenticated.`
 6. **Execution model selection** — the router computes the sub-agent model.
    When adaptive routing is disabled (default), this is the legacy
    `mapModel(skill.rawModel, ...)` path. When enabled, the Judge's
@@ -749,12 +671,12 @@ well-known skills:
    the execution-scoped `context-memory` MCP is attached too. If
    `executionTrace.enabled=true`, a trace middleware captures every tool call.
    The sub-agent's prompt is appended with the `AUGGIE_DIRECTIVE`:
-   *"Use the `codebase-retrieval` MCP tool for workspace context."*
+   _"Use the `codebase-retrieval` MCP tool for workspace context."_
    Structured route, context-budget, and optional prompt-prefix logs are emitted
    at this point.
 9. **Overflow middleware** — every oversized `auggie/codebase-retrieval` response
    is blocked. With context memory disabled, it is replaced with `"Result too
-   large. Please refine your codebase-retrieval query to be more specific."`
+large. Please refine your codebase-retrieval query to be more specific."`
    With context memory enabled, the payload is stored execution-locally and the
    replacement includes an overflow handle plus bounded preview.
 10. **Resolution** — final sub-agent text is sanitized according to
@@ -779,25 +701,25 @@ get a `[System]: Router busy` warning.
 
 ## Operational defaults
 
-| Knob                      | Default                          | Why                                                |
-| ------------------------- | -------------------------------- | -------------------------------------------------- |
-| Routing engine            | `anthropic/claude-3-5-haiku`     | Cheap and Anthropic-aligned for routing.           |
-| History window            | 20 messages                      | Enough for context, not enough to drown the brief. |
-| Total timeout             | 300 s                            | Hard kill prevents runaway billing.                |
-| MCP inactivity timeout    | 60 s                             | Stops OpenRouter loops when a model hangs.         |
-| Sub-agent temperature     | 0.0                              | Mandatory for rigid tool usage.                    |
-| Overflow ceiling          | 25 000 B                         | Forces query refinement, not context dumping.      |
-| Auggie binary path        | `"auggie"`                       | Relies on `$PATH` by default; override for security.|
-| Allowed provider prefixes | `[]` (allow all)                 | Restrict to known providers to prevent model redirection. |
-| Adaptive routing          | disabled                         | Backwards-compatible opt-in.                       |
-| Adaptive preference       | `balanced`                       | Neutral cost-quality bias.                         |
-| Skill model policy        | `pin`                            | Preserve existing `SKILL.md model:` behavior.      |
-| Surface routing decision  | `false`                          | Keep default UI minimal.                           |
-| Output sanitizer          | enabled                          | Keeps tool traces out of the main chat.            |
-| Context budgets           | disabled                         | Static overflow ceiling unless explicitly enabled. |
-| History assembly          | `recent`                         | Preserve legacy history behavior by default.       |
-| Context memory            | disabled                         | Legacy overflow replacement unless opted in.       |
-| Parallel sub-agents       | disabled                         | Explicit advanced API only.                        |
+| Knob                      | Default                      | Why                                                       |
+| ------------------------- | ---------------------------- | --------------------------------------------------------- |
+| Routing engine            | `anthropic/claude-3-5-haiku` | Cheap and Anthropic-aligned for routing.                  |
+| History window            | 20 messages                  | Enough for context, not enough to drown the brief.        |
+| Total timeout             | 300 s                        | Hard kill prevents runaway billing.                       |
+| MCP inactivity timeout    | 60 s                         | Stops OpenRouter loops when a model hangs.                |
+| Sub-agent temperature     | 0.0                          | Mandatory for rigid tool usage.                           |
+| Overflow ceiling          | 25 000 B                     | Forces query refinement, not context dumping.             |
+| Auggie binary path        | `"auggie"`                   | Relies on `$PATH` by default; override for security.      |
+| Allowed provider prefixes | `[]` (allow all)             | Restrict to known providers to prevent model redirection. |
+| Adaptive routing          | disabled                     | Backwards-compatible opt-in.                              |
+| Adaptive preference       | `balanced`                   | Neutral cost-quality bias.                                |
+| Skill model policy        | `pin`                        | Preserve existing `SKILL.md model:` behavior.             |
+| Surface routing decision  | `false`                      | Keep default UI minimal.                                  |
+| Output sanitizer          | enabled                      | Keeps tool traces out of the main chat.                   |
+| Context budgets           | disabled                     | Static overflow ceiling unless explicitly enabled.        |
+| History assembly          | `recent`                     | Preserve legacy history behavior by default.              |
+| Context memory            | disabled                     | Legacy overflow replacement unless opted in.              |
+| Parallel sub-agents       | disabled                     | Explicit advanced API only.                               |
 
 ## Security model
 
@@ -851,7 +773,3 @@ npm run build       # compile to dist/
 npm run lint        # tsc --noEmit
 npm test            # node --test via tsx loader
 ```
-
-## License
-
-MIT

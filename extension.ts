@@ -10,6 +10,7 @@
  * same convention used by every Pi extension.
  */
 import { createRouter, createExtensionBridge } from "./dist/index.js";
+import { installAgentPromptInjection, readPackageVersion } from "./dist/agentPrompt.js";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import {
@@ -26,6 +27,19 @@ const VALID_SKILL_NAME = /^[a-zA-Z0-9_-]+$/;
 export default function auggieRouterExtension(pi: ExtensionAPI): void {
   const host = createExtensionBridge(pi);
   const router = createRouter(host);
+
+  // ── Auto-inject agent system-prompt block (delegation conventions) ───
+  // The block content is versioned with the package — see
+  // dist/agentPrompt.js for the rules. Opt out via
+  // `.pi/settings.json` → `auggieRouter.promptInjection.enabled: false`.
+  if (router.getSettings().promptInjection.enabled) {
+    installAgentPromptInjection(pi, host.log);
+  } else {
+    host.log?.(
+      "info",
+      `pi-auggie-router v${readPackageVersion()}: system-prompt injection disabled by config`
+    );
+  }
 
   // ── Skill discovery ─────────────────────────────────────────────────
   function getSkillCommands() {

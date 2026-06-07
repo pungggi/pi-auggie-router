@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Auto-injected agent system prompt** — the extension now installs a `before_agent_start` hook that appends a versioned `## pi-auggie-router` block to the system prompt on every agent turn. The block teaches the main agent how to delegate to skills (correct slash-command syntax, no pre-loading of files, no re-executing sub-agent work, the three bridge limitations, failure handling). The block content is a string constant in `src/agentPrompt.ts` and ships with the package — no user-side `APPEND_SYSTEM.md` maintenance required. Opt out via `auggieRouter.promptInjection.enabled: false` in `.pi/settings.json`. See README § *Auto-injected agent system prompt*.
+
+- New public exports: `AGENT_PROMPT_BLOCK`, `appendAgentPromptBlock`, `installAgentPromptInjection`, `readPackageVersion` (and the `PromptInjectionSettings` / `BeforeAgentStartEventLike` types) from the `pi-auggie-router` package root.
+
+- New config setting: `auggieRouter.promptInjection.enabled` (default `true`).
+
 ### Changed
 
 - **Trace roadmap refocused** from harness self-evolution to trace observability for skill debugging. The original 5-phase auto-evolution loop (LLM proposer → benchmark validator → auto-apply) was killed after grill review: open-ended skills have no ground-truth signal to close the loop on. New direction is human-driven observability — deterministic trace classifier, degradation alerts, trace reports. PRD renamed to `docs/PRD-trace-observability.md`; in-source comments updated; new tracker in `docs/PRD-Implementation-Status.md` §12. No code behavior change.

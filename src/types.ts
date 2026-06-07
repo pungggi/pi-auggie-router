@@ -288,6 +288,25 @@ export interface RouterSettings {
   executionTrace: ExecutionTraceSettings;
   /** Trace observability — classification, degradation alerts, and reporting. Enabled by default. */
   traceObservability: TraceObservabilitySettings;
+  /**
+   * Auto-inject a versioned system-prompt block on every agent turn so the
+   * main agent follows the router's delegation conventions (slash-command
+   * syntax, no pre-loading of files, no re-doing sub-agent work, etc.).
+   *
+   * The block content ships with the package; updates roll out via
+   * `npm update pi-auggie-router`. Set `enabled: false` to opt out.
+   */
+  promptInjection: PromptInjectionSettings;
+}
+
+export interface PromptInjectionSettings {
+  /**
+   * When `true` (default), the extension registers a `before_agent_start`
+   * hook that appends a `## pi-auggie-router` block to the system prompt on
+   * every turn. When `false`, the hook is not registered and the agent
+   * follows its native behavior.
+   */
+  enabled: boolean;
 }
 
 export type ExecutionRoutingPreference =

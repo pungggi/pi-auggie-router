@@ -24,6 +24,14 @@ own queries instead of vomiting megabytes back into the loop.
 This package is **vendor-locked on purpose**. It will not run without a
 working local `auggie` install.
 
+The main agent learns how to use the router automatically — the
+extension installs a `before_agent_start` hook that injects a
+versioned `## pi-auggie-router` block into the system prompt on
+every turn, so the agent picks the right skill, uses the correct
+invocation syntax, and respects the bridge limitations without any
+user-side configuration. See [Auto-injected agent system
+prompt](#auto-injected-agent-system-prompt) for details and opt-out.
+
 ## Installation
 
 ```bash
@@ -139,6 +147,9 @@ All knobs live under `auggieRouter` in `.pi/settings.json`:
       "reportMaxInlineTraces": 5,
       "regressionWindowSize": 10,
       "maxTracesPerSkill": 20
+    },
+    "promptInjection": {
+      "enabled": true
     }
   }
 }
@@ -344,6 +355,116 @@ When the sanitizer removes or truncates anything, it emits a counts-only log:
 ```
 
 Removed content is **never** logged.
+
+## Auto-injected agent system prompt
+
+Skills are registered as ordinary Pi commands — the main agent can see
+them in its command palette — but out of the box the main agent has no
+idea that `/skill <name>` is the *preferred* way to do focused work,
+that `/skill:<name>` (colon form) silently falls through as plain text,
+or that the extension bridge leaves the input unlocked while a skill
+runs. Without those rules, the agent falls back to inline handling,
+re-reads files into context, and occasionally types the colon form
+thinking it's the canonical syntax.
+
+To make the main agent use the router correctly without requiring every
+user to maintain a hand-written `APPEND_SYSTEM.md`, the extension
+**versioned with this package** installs a `before_agent_start` hook
+that appends a `## pi-auggie-router` block to the system prompt on
+every turn. The block content lives in
+[`src/agentPrompt.ts`](src/agentPrompt.ts) (compiled to
+`dist/agentPrompt.js`) and ships with the package — when you run
+`npm update pi-auggie-router`, the rules update automatically. No
+user-side maintenance required.
+
+The injected block teaches the agent:
+
+- **When to delegate** to a skill vs. doing the work inline
+- **Correct invocation syntax** (`/skill <name> <task>`, never
+  `/skill:<name>`)
+- **Hard rules** — don't pre-load files, don't re-execute the
+  sub-agent's work, don't invoke the picker UI, don't invoke the
+  trace commands on the user's behalf
+- **How to write a good task description** (specific file path,
+  desired outcome, constraints — these feed the Actor/Judge brief
+  loop)
+- **The three bridge limitations** to respect (input not locked,
+  Q&A fallback broken, tool traces stripped)
+- **Failure handling** — surface `[System Error]: ...` lines
+  verbatim, suggest concrete next steps, never silently retry
+
+### What the agent sees
+
+The block is injected after Pi's default prompt is fully assembled,
+so the agent receives it in addition to whatever else Pi has loaded
+(AGENTS.md, context files, the user's own APPEND_SYSTEM.md, etc.).
+The block is identical on every turn — there's no per-session
+diversification, no rotation, no LLM-generated variations.
+
+### Versioning and updates
+
+The block is a string constant in the package source. When the rules
+change:
+
+1. The string in `src/agentPrompt.ts` is updated.
+2. A new version of `pi-auggie-router` is published.
+3. Users run `npm update pi-auggie-router` (or
+   `pi update pi-auggie-router`).
+4. The next agent turn picks up the new rules. No restart, no
+   config edit, no manual file sync.
+
+### Source of truth — and how to inspect it
+
+The block is plain text in
+[`src/agentPrompt.ts`](src/agentPrompt.ts):
+
+```ts
+import { AGENT_PROMPT_BLOCK } from "pi-auggie-router";
+console.log(AGENT_PROMPT_BLOCK);
+```
+
+Or after install, peek at the compiled file:
+
+```bash
+cat node_modules/pi-auggie-router/dist/agentPrompt.js | head -80
+```
+
+### Disabling the injection
+
+To opt out, set `auggieRouter.promptInjection.enabled` to `false` in
+`.pi/settings.json` (workspace) or `~/.pi/settings.json` (global):
+
+```json
+{
+  "auggieRouter": {
+    "promptInjection": {
+      "enabled": false
+    }
+  }
+}
+```
+
+With the hook disabled, the agent sees only the default Pi system
+prompt. You can still teach it the router's conventions by writing
+your own rules into `.pi/APPEND_SYSTEM.md` (project) or
+`~/.pi/agent/APPEND_SYSTEM.md` (global).
+
+### Why not just write a `~/.pi/agent/APPEND_SYSTEM.md`?
+
+Two reasons:
+
+1. **No user maintenance.** A hand-written file drifts out of sync
+   with the router's actual behavior as the package is upgraded. A
+   versioned block in the package source never drifts.
+2. **No duplication.** Pi auto-loads `APPEND_SYSTEM.md` files. If we
+   *also* injected the same content via the hook, the rules would
+   appear twice in the system prompt. The hook is the single
+   injection point.
+
+If you want a visible file you can edit, the block source is
+[`src/agentPrompt.ts`](src/agentPrompt.ts) — copy from there into
+your own `APPEND_SYSTEM.md` and disable the hook. You now have a
+hand-maintained copy that the router respects but does not duplicate.
 
 ## Context budgets by execution tier
 

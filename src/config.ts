@@ -8,6 +8,7 @@ import type {
   ExecutionTraceSettings,
   HistoryAssemblySettings,
   HistoryMiddleMode,
+  PromptInjectionSettings,
   HistoryStrategy,
   OutputSanitizerSettings,
   ParallelSubagentsSettings,
@@ -56,6 +57,10 @@ export const DEFAULT_TRACE_OBSERVABILITY: TraceObservabilitySettings = {
   reportMaxInlineTraces: 5,
   regressionWindowSize: 10,
   maxTracesPerSkill: 20,
+};
+
+export const DEFAULT_PROMPT_INJECTION: PromptInjectionSettings = {
+  enabled: true,
 };
 
 export const DEFAULT_PARALLEL_SUBAGENTS: ParallelSubagentsSettings = {
@@ -107,6 +112,7 @@ export const DEFAULT_SETTINGS: RouterSettings = {
   parallelSubagents: DEFAULT_PARALLEL_SUBAGENTS,
   executionTrace: DEFAULT_EXECUTION_TRACE,
   traceObservability: DEFAULT_TRACE_OBSERVABILITY,
+  promptInjection: DEFAULT_PROMPT_INJECTION,
 };
 
 function cloneExecutionRouting(
@@ -163,6 +169,12 @@ function cloneTraceObservability(
   return { ...s };
 }
 
+function clonePromptInjection(
+  s: PromptInjectionSettings = DEFAULT_PROMPT_INJECTION
+): PromptInjectionSettings {
+  return { ...s };
+}
+
 function cloneDefaultSettings(): RouterSettings {
   return {
     ...DEFAULT_SETTINGS,
@@ -175,6 +187,7 @@ function cloneDefaultSettings(): RouterSettings {
     parallelSubagents: cloneParallelSubagents(),
     executionTrace: cloneExecutionTrace(),
     traceObservability: cloneTraceObservability(),
+    promptInjection: clonePromptInjection(),
   };
 }
 
@@ -210,6 +223,9 @@ function mergeSettings(validated: Partial<RouterSettings>): RouterSettings {
     traceObservability: validated.traceObservability
       ? cloneTraceObservability(validated.traceObservability)
       : base.traceObservability,
+    promptInjection: validated.promptInjection
+      ? clonePromptInjection(validated.promptInjection)
+      : base.promptInjection,
   };
 }
 
@@ -850,6 +866,28 @@ function assertNonEmptyStringArray(val: unknown, key: string): string[] {
   return result;
 }
 
+function validatePromptInjection(
+  raw: unknown,
+  warnings: string[]
+): PromptInjectionSettings | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    warnings.push(
+      `auggieRouter.promptInjection: expected object, got ${Array.isArray(raw) ? "array" : typeof raw}`
+    );
+    return undefined;
+  }
+  const r = raw as Record<string, unknown>;
+  const out: PromptInjectionSettings = { ...DEFAULT_PROMPT_INJECTION };
+  if ("enabled" in r) {
+    try {
+      out.enabled = assertBool(r.enabled, "promptInjection.enabled");
+    } catch (e) {
+      warnings.push((e as Error).message);
+    }
+  }
+  return out;
+}
+
 /**
  * Validate a raw `auggieRouter` object from `.pi/settings.json`, returning
  * a safe `Partial<RouterSettings>`. Invalid fields are silently dropped so
@@ -1018,6 +1056,12 @@ function validateSettings(
     const validated = validateTraceObservability(raw.traceObservability, warnings);
     if (validated !== undefined) {
       out.traceObservability = validated;
+    }
+  }
+  if ("promptInjection" in raw) {
+    const validated = validatePromptInjection(raw.promptInjection, warnings);
+    if (validated !== undefined) {
+      out.promptInjection = validated;
     }
   }
 

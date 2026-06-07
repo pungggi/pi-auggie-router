@@ -667,6 +667,13 @@ export {
 export type { TraceReportConfig, TraceReportInput } from "./traceReport.js";
 export { renderTraceView } from "./traceViewer.js";
 export type { TraceViewConfig } from "./traceViewer.js";
+export {
+  AGENT_PROMPT_BLOCK,
+  appendAgentPromptBlock,
+  installAgentPromptInjection,
+  readPackageVersion,
+} from "./agentPrompt.js";
+export type { BeforeAgentStartEventLike } from "./agentPrompt.js";
 export { RouterState } from "./state.js";
 export type {
   ChatMessage,
@@ -687,6 +694,7 @@ export type {
   ParallelSubagentsSettings,
   ParsedSkill,
   PiHost,
+  PromptInjectionSettings,
   RouterSettings,
   SkillBrief,
   SkillModelPolicy,

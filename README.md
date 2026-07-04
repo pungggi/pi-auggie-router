@@ -55,6 +55,7 @@ router.dispose();
 | `onUserInput(cb)`       | Invoked for every user input; return `{cancel:true}` to swallow.        |
 | `onBeforeMessage(cb)`   | Invoked before a typed message is sent; used for the Q&A fallback.      |
 | `registerAutocomplete` (optional) | Declare the `/skill:` completion trigger (Pi ≥ 0.79.1).       |
+| `onCompaction` (optional) | Compaction events driving the adaptive overflow ceiling (Pi ≥ 0.79.10). |
 | `resolveWorkspacePath`  | Resolve paths inside the active workspace (for `.pi/skills/...`).       |
 | `resolveHomePath`       | Resolve paths inside `~` (for `~/.pi/agent/skills/...`).                |
 | `log` (optional)        | Structured logger.                                                      |
@@ -75,7 +76,8 @@ All knobs live under `auggieRouter` in `.pi/settings.json`:
     "totalTimeoutMs": 300000,
     "inactivityTimeoutMs": 60000,
     "subAgentTemperature": 0.0,
-    "overflowCeilingBytes": 25000
+    "overflowCeilingBytes": 25000,
+    "overflowFloorBytes": 5000
   }
 }
 ```
@@ -135,6 +137,13 @@ suggestion. Hosts without autocomplete support are unaffected.
 7. **Overflow middleware** — every `auggie/codebase-retrieval` response over
    25 KB (configurable) is dropped and replaced with `"Result too large.
    Please refine your codebase-retrieval query to be more specific."`
+   On hosts that expose compaction events (Pi ≥ 0.79.10 `onCompaction`),
+   the ceiling is adaptive: each automatic compaction that will retry the
+   interrupted request (`reason: "threshold" | "overflow"`, `willRetry: true`)
+   halves the ceiling down to `overflowFloorBytes`, so the retried turn pulls
+   smaller payloads instead of re-triggering the same overflow. Manual
+   compactions never shrink it. The ceiling resets to the configured value
+   at the start of every skill run.
 8. **Resolution** — final sub-agent text is posted to the main thread, the
    editor is unlocked, the state machine resets to `idle`.
 
@@ -159,6 +168,7 @@ get a `[System]: Router busy` warning.
 | MCP inactivity timeout  | 60 s                             | Stops OpenRouter loops when a model hangs.         |
 | Sub-agent temperature   | 0.0                              | Mandatory for rigid tool usage.                    |
 | Overflow ceiling        | 25 000 B                         | Forces query refinement, not context dumping.      |
+| Overflow floor          | 5 000 B                          | Lower bound for the adaptive post-compaction ceiling. |
 
 ## Development
 

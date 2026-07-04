@@ -16,6 +16,11 @@ export interface ExecutionInput {
   brief: SkillBrief;
   /** Already mapped to the gateway-qualified ID. */
   resolvedModel: string;
+  /**
+   * Live overflow ceiling getter; falls back to the static
+   * `settings.overflowCeilingBytes` when absent.
+   */
+  overflowCeiling?: () => number;
 }
 
 function renderBrief(brief: SkillBrief): string {
@@ -48,7 +53,9 @@ export async function executeSkill(
     userPrompt: renderBrief(input.brief),
     temperature: settings.subAgentTemperature,
     mcpServers: [buildAuggieMcpSpec()],
-    toolResultMiddleware: makeOverflowMiddleware(settings.overflowCeilingBytes),
+    toolResultMiddleware: makeOverflowMiddleware(
+      input.overflowCeiling ?? settings.overflowCeilingBytes
+    ),
     totalTimeoutMs: settings.totalTimeoutMs,
     inactivityTimeoutMs: settings.inactivityTimeoutMs,
   });

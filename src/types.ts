@@ -76,6 +76,17 @@ export interface AutocompleteSuggestion {
 }
 
 /**
+ * Compaction notification from the host, matching Pi's extension compaction
+ * events (Pi >= 0.79.10 `reason` / `willRetry` metadata).
+ */
+export interface CompactionEvent {
+  /** What initiated the compaction. */
+  reason: "manual" | "threshold" | "overflow";
+  /** True when the host will retry the interrupted request after compacting. */
+  willRetry: boolean;
+}
+
+/**
  * Declares a completion trigger to the host, matching Pi's natural
  * extension autocomplete (Pi >= 0.79.1 character/prefix declarations).
  */
@@ -112,6 +123,11 @@ export interface PiHost {
    * without autocomplete support simply skip registration.
    */
   registerAutocomplete?: (spec: AutocompleteSpec) => () => void;
+  /**
+   * Subscribe to compaction events (Pi >= 0.79.10). Optional: hosts without
+   * compaction metadata keep the static overflow ceiling.
+   */
+  onCompaction?: (cb: (event: CompactionEvent) => void) => () => void;
   /** Resolve a path inside the active workspace (for `.pi/` lookups). */
   resolveWorkspacePath: (relative: string) => string;
   /** Resolve a path inside the user's home dir (`~/.pi/...`). */
@@ -141,6 +157,8 @@ export interface RouterSettings {
   subAgentTemperature: number;
   /** Single-payload Auggie ceiling, bytes. */
   overflowCeilingBytes: number;
+  /** Lower bound the adaptive ceiling may shrink to after compactions, bytes. */
+  overflowFloorBytes: number;
 }
 
 export interface ParsedSkill {

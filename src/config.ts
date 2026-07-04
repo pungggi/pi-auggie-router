@@ -12,6 +12,7 @@ export const DEFAULT_SETTINGS: RouterSettings = {
   inactivityTimeoutMs: 60_000,
   subAgentTemperature: 0.0,
   overflowCeilingBytes: 25_000,
+  overflowFloorBytes: 5_000,
 };
 
 interface PiSettingsFile {

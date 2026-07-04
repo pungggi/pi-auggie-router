@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createRouter } from "../src/index.ts";
 import type {
   ChatMessage,
+  CompactionEvent,
   LLMCallOptions,
   PiHost,
   SubAgentRunOptions,
@@ -27,6 +28,8 @@ interface HarnessOpts {
    * verify that callWithTimeout's Promise.race short-circuits regardless.
    */
   ignoreSignal?: boolean;
+  /** When true the host exposes `onCompaction` (Pi >= 0.79.10). */
+  withCompaction?: boolean;
 }
 
 function harness(opts: HarnessOpts) {
@@ -48,6 +51,7 @@ function harness(opts: HarnessOpts) {
 
   let inputCb: ((raw: string) => { cancel: boolean } | void) | null = null;
   let beforeCb: ((msg: string) => { cancel: boolean }) | null = null;
+  let compactionCb: ((event: CompactionEvent) => void) | null = null;
 
   let i = 0;
   const host: PiHost = {
@@ -94,6 +98,15 @@ function harness(opts: HarnessOpts) {
     resolveHomePath: (rel) => join(home, rel),
   };
 
+  if (opts.withCompaction) {
+    host.onCompaction = (cb) => {
+      compactionCb = cb;
+      return () => {
+        compactionCb = null;
+      };
+    };
+  }
+
   return {
     host,
     workspace,
@@ -104,6 +117,8 @@ function harness(opts: HarnessOpts) {
     subAgentCalls,
     fireInput: (raw: string) => inputCb?.(raw),
     fireBefore: (msg: string) => beforeCb?.(msg),
+    fireCompaction: (event: CompactionEvent) => compactionCb?.(event),
+    hasCompactionListener: () => compactionCb !== null,
     cleanup: () => {
       rmSync(workspace, { recursive: true, force: true });
       rmSync(home, { recursive: true, force: true });
@@ -394,6 +409,56 @@ describe("createRouter end-to-end", () => {
       const cancelled = h.messages.find((m) => m.text.includes("Q&A timed out"));
       assert.ok(cancelled, "expected Q&A timeout cancel message");
       assert.equal(h.subAgentCalls.length, 0);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("lowers the overflow ceiling on retry-bound compactions and resets per run", async () => {
+    const h = harness({
+      llmResponses: [...PASSING_LLM_PAIR, ...PASSING_LLM_PAIR],
+      withCompaction: true,
+    });
+    const auggieCtx = {
+      serverName: "auggie",
+      toolName: "codebase-retrieval",
+      args: {},
+    };
+    const payload = "x".repeat(13_000); // between floor (5 000) and ceiling (25 000)
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+
+      await router.trigger("/skill:demo");
+      const mw1 = h.subAgentCalls[0]!.toolResultMiddleware!;
+      assert.deepEqual(mw1(auggieCtx, payload), { block: false });
+
+      // Overflow compaction with retry: 25 000 → 12 500. The middleware
+      // reads the live ceiling, so the already-captured mw1 now blocks.
+      h.fireCompaction({ reason: "overflow", willRetry: true });
+      assert.equal(mw1(auggieCtx, payload).block, true);
+
+      // Manual and non-retry compactions never shrink the ceiling further.
+      h.fireCompaction({ reason: "manual", willRetry: true });
+      h.fireCompaction({ reason: "threshold", willRetry: false });
+      assert.equal(mw1(auggieCtx, "x".repeat(12_000)).block, false);
+
+      // A fresh skill run starts back at the configured ceiling.
+      await router.trigger("/skill:demo");
+      const mw2 = h.subAgentCalls[1]!.toolResultMiddleware!;
+      assert.deepEqual(mw2(auggieCtx, payload), { block: false });
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("dispose() unsubscribes the compaction listener", async () => {
+    const h = harness({ llmResponses: [], withCompaction: true });
+    try {
+      const router = createRouter(h.host, { preflight: h.preflight });
+      assert.equal(h.hasCompactionListener(), true);
+      router.dispose();
+      assert.equal(h.hasCompactionListener(), false);
     } finally {
       h.cleanup();
     }

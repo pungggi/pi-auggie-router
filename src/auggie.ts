@@ -85,17 +85,57 @@ export function buildAuggieMcpSpec(): MCPServerSpec {
  *
  * The byte-size check uses UTF-8 byte length, not character count, so a
  * payload of multi-byte characters is rejected at the same byte ceiling.
+ *
+ * `maxBytes` may be a getter so the ceiling can change while a sub-agent
+ * run is in flight (see `AdaptiveOverflowCeiling`).
  */
-export function makeOverflowMiddleware(maxBytes: number): ToolResultMiddleware {
+export function makeOverflowMiddleware(
+  maxBytes: number | (() => number)
+): ToolResultMiddleware {
   return (ctx, raw) => {
     if (ctx.serverName !== AUGGIE_MCP_NAME) return { block: false };
     if (ctx.toolName !== AUGGIE_TOOL_NAME) return { block: false };
+    const ceiling = typeof maxBytes === "function" ? maxBytes() : maxBytes;
     const byteLen = Buffer.byteLength(raw, "utf8");
-    if (byteLen <= maxBytes) return { block: false };
+    if (byteLen <= ceiling) return { block: false };
     return {
       block: true,
       replacement:
         "Result too large. Please refine your codebase-retrieval query to be more specific.",
     };
   };
+}
+
+/**
+ * Mutable overflow ceiling that reacts to host compaction events
+ * (Pi >= 0.79.10): each retry-bound compaction halves the ceiling toward
+ * `floor`, forcing the retried sub-agent turn to pull smaller payloads
+ * instead of re-triggering the same overflow.
+ */
+export class AdaptiveOverflowCeiling {
+  private current: number;
+
+  constructor(
+    private readonly configured: number,
+    private readonly floor: number
+  ) {
+    this.current = configured;
+  }
+
+  get(): number {
+    return this.current;
+  }
+
+  /** Halve toward the floor. Returns the new ceiling, or null if unchanged. */
+  lower(): number | null {
+    const next = Math.max(this.floor, Math.floor(this.current / 2));
+    if (next >= this.current) return null;
+    this.current = next;
+    return next;
+  }
+
+  /** Restore the configured ceiling (called at the start of each skill run). */
+  reset(): void {
+    this.current = this.configured;
+  }
 }

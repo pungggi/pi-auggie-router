@@ -1,5 +1,5 @@
 import { runActorJudgeLoop } from "./actorJudge.js";
-import { runAuggieStatus } from "./auggie.js";
+import { AdaptiveOverflowCeiling, runAuggieStatus } from "./auggie.js";
 import { makeSkillAutocomplete } from "./autocomplete.js";
 import { DEFAULT_SETTINGS, loadSettings } from "./config.js";
 import { mapModel } from "./modelMapper.js";
@@ -39,6 +39,10 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
   const settings = loadSettings(host);
   const state = new RouterState();
   const preflight = opts.preflight ?? (() => runAuggieStatus());
+  const overflowCeiling = new AdaptiveOverflowCeiling(
+    settings.overflowCeilingBytes,
+    settings.overflowFloorBytes
+  );
 
   const log = (level: "debug" | "info" | "warn" | "error", msg: string) => {
     host.log?.(level, msg);
@@ -105,6 +109,7 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
       }
 
       state.beginExecution();
+      overflowCeiling.reset();
       host.setInputLocked(true, LOCK_REASON);
       host.postSystemMessage(
         `[System]: ⚙️ Executing /skill:${skill.name} (Auggie semantic retrieval running...)`
@@ -116,6 +121,7 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
           skill,
           brief,
           resolvedModel,
+          overflowCeiling: () => overflowCeiling.get(),
         });
         host.postAssistantMessage(result.finalText);
         if (result.stoppedReason !== "completed") {
@@ -202,11 +208,27 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
   // Hosts without `registerAutocomplete` skip this and keep working.
   const offAutocomplete = host.registerAutocomplete?.(makeSkillAutocomplete(host));
 
+  // Retry-bound automatic compactions (Pi >= 0.79.10) halve the overflow
+  // ceiling so the retried turn pulls smaller Auggie payloads instead of
+  // re-triggering the same overflow. Manual compactions are the user's
+  // call and don't shrink anything.
+  const offCompaction = host.onCompaction?.((event) => {
+    if (!event.willRetry || event.reason === "manual") return;
+    const next = overflowCeiling.lower();
+    if (next !== null) {
+      log(
+        "info",
+        `pi-auggie-router: ${event.reason} compaction with retry — overflow ceiling lowered to ${next} bytes`
+      );
+    }
+  });
+
   return {
     dispose: () => {
       offInput();
       offBefore();
       offAutocomplete?.();
+      offCompaction?.();
       state.reset();
     },
     getSettings: () => ({ ...settings }),
@@ -231,13 +253,14 @@ export {
 } from "./parser.js";
 export type { SkillListing } from "./parser.js";
 export { makeSkillAutocomplete, suggestSkills, SKILL_TRIGGER } from "./autocomplete.js";
-export { makeOverflowMiddleware, runAuggieStatus, AUGGIE_DIRECTIVE, AUGGIE_MCP_NAME, AUGGIE_TOOL_NAME } from "./auggie.js";
+export { makeOverflowMiddleware, AdaptiveOverflowCeiling, runAuggieStatus, AUGGIE_DIRECTIVE, AUGGIE_MCP_NAME, AUGGIE_TOOL_NAME } from "./auggie.js";
 export { runActorJudgeLoop } from "./actorJudge.js";
 export { RouterState } from "./state.js";
 export type {
   AutocompleteSpec,
   AutocompleteSuggestion,
   ChatMessage,
+  CompactionEvent,
   JudgeRubric,
   LLMCallOptions,
   LLMResponse,

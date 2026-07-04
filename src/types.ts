@@ -147,6 +147,14 @@ export interface RouterSettings {
   maxJudgeIterations: number;
   /** Per-call timeout for Actor / Judge routing-LLM calls, ms. */
   routingTimeoutMs: number;
+  /**
+   * Retries per routing call after a thrown (non-timeout) error. Set to 0
+   * when the host already retries at provider level (Pi >= 0.76.0
+   * `retry.provider.maxRetries`) to avoid multiplying attempts.
+   */
+  routingMaxRetries: number;
+  /** First retry delay, ms; doubles per attempt. */
+  routingRetryBaseDelayMs: number;
   /** Maximum time to wait for the user's Q&A clarification reply, ms. */
   qaTimeoutMs: number;
   /** Total sub-agent execution cap, ms. */

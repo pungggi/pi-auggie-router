@@ -72,6 +72,8 @@ All knobs live under `auggieRouter` in `.pi/settings.json`:
     "historyWindow": 20,
     "maxJudgeIterations": 2,
     "routingTimeoutMs": 60000,
+    "routingMaxRetries": 2,
+    "routingRetryBaseDelayMs": 250,
     "qaTimeoutMs": 300000,
     "totalTimeoutMs": 300000,
     "inactivityTimeoutMs": 60000,
@@ -89,6 +91,14 @@ All knobs live under `auggieRouter` in `.pi/settings.json`:
 
 Defaults match the values shown above. Only `defaultProvider` is expected to
 change in normal use; everything else is opinionated for a reason.
+
+> **Routing retries:** thrown `callLLM` errors (network blips, 429/5xx) are
+> retried up to `routingMaxRetries` times with exponential backoff
+> (`routingRetryBaseDelayMs`, doubling per attempt). Timeouts are never
+> retried — they already consumed `routingTimeoutMs` and degrade into the
+> Judge fallback / Q&A path instead. If your host already retries at
+> provider level (Pi ≥ 0.76.0 `retry.provider.maxRetries`), set
+> `routingMaxRetries` to `0` so attempts don't multiply.
 
 ### Skill `model:` translation
 
@@ -165,6 +175,7 @@ get a `[System]: Router busy` warning.
 | Routing engine          | `anthropic/claude-3-5-haiku`     | Cheap and Anthropic-aligned for routing.           |
 | History window          | 20 messages                      | Enough for context, not enough to drown the brief. |
 | Total timeout           | 300 s                            | Hard kill prevents runaway billing.                |
+| Routing retries         | 2 × (250 ms backoff, doubling)   | Survives transient provider errors; timeouts excluded. |
 | MCP inactivity timeout  | 60 s                             | Stops OpenRouter loops when a model hangs.         |
 | Sub-agent temperature   | 0.0                              | Mandatory for rigid tool usage.                    |
 | Overflow ceiling        | 25 000 B                         | Forces query refinement, not context dumping.      |

@@ -30,6 +30,8 @@ interface HarnessOpts {
   ignoreSignal?: boolean;
   /** When true the host exposes `onCompaction` (Pi >= 0.79.10). */
   withCompaction?: boolean;
+  /** Per-call error injection: callLLM #n rejects with llmErrors[n] if set. */
+  llmErrors?: (Error | undefined)[];
 }
 
 function harness(opts: HarnessOpts) {
@@ -61,7 +63,8 @@ function harness(opts: HarnessOpts) {
     getRecentMessages: () => opts.history ?? [],
     callLLM: async (o) => {
       llmCalls.push(o);
-      const t = opts.llmResponses[i] ?? "";
+      const idx = i;
+      const t = opts.llmResponses[idx] ?? "";
       i += 1;
       if (opts.llmDelayMs && opts.llmDelayMs > 0) {
         await new Promise<void>((resolve, reject) => {
@@ -74,6 +77,8 @@ function harness(opts: HarnessOpts) {
           }
         });
       }
+      const err = opts.llmErrors?.[idx];
+      if (err) throw err;
       return { text: t };
     },
     runSubAgent: async (o) => {
@@ -409,6 +414,90 @@ describe("createRouter end-to-end", () => {
       const cancelled = h.messages.find((m) => m.text.includes("Q&A timed out"));
       assert.ok(cancelled, "expected Q&A timeout cancel message");
       assert.equal(h.subAgentCalls.length, 0);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("retries a transiently failing routing call and still executes the skill", async () => {
+    // Call #0 (first Actor attempt) rejects; the retry (call #1) and the
+    // Judge call (call #2) succeed.
+    const h = harness({
+      llmResponses: ["", ...PASSING_LLM_PAIR],
+      llmErrors: [new Error("ECONNRESET")],
+      settingsOverride: { routingRetryBaseDelayMs: 5 },
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      assert.equal(h.llmCalls.length, 3, "expected 1 failed + 2 successful calls");
+      assert.equal(h.subAgentCalls.length, 1);
+      const assistant = h.messages.find((m) => m.kind === "assistant");
+      assert.equal(assistant?.text, "DONE");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("gives up after exhausting routing retries and aborts the skill", async () => {
+    const boom = new Error("upstream 503");
+    const h = harness({
+      llmResponses: [],
+      llmErrors: [boom, boom, boom],
+      settingsOverride: { routingMaxRetries: 2, routingRetryBaseDelayMs: 5 },
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      assert.equal(h.llmCalls.length, 3, "expected exactly maxRetries+1 attempts");
+      assert.equal(h.subAgentCalls.length, 0);
+      const sys = h.messages.find((m) => m.text.includes("upstream 503"));
+      assert.ok(sys, "expected the final error surfaced as a system message");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("routingMaxRetries: 0 disables retries entirely", async () => {
+    const h = harness({
+      llmResponses: [],
+      llmErrors: [new Error("boom")],
+      settingsOverride: { routingMaxRetries: 0 },
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+      assert.equal(h.llmCalls.length, 1);
+      assert.equal(h.subAgentCalls.length, 0);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("does not retry routing timeouts — they fall through to the Q&A path", async () => {
+    const h = harness({
+      llmResponses: [...PASSING_LLM_PAIR, ...PASSING_LLM_PAIR],
+      settingsOverride: {
+        routingTimeoutMs: 25,
+        qaTimeoutMs: 25,
+        routingRetryBaseDelayMs: 5,
+      },
+      llmDelayMs: 200,
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      // 2 iterations x (Actor + Judge) = 4 calls; retries would inflate this.
+      assert.equal(h.llmCalls.length, 4);
+      const ask = h.messages.find((m) => m.text.includes("Missing context for skill"));
+      assert.ok(ask, "expected the timeout to degrade into Q&A, not retries");
     } finally {
       h.cleanup();
     }

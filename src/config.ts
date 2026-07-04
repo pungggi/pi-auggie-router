@@ -7,6 +7,8 @@ export const DEFAULT_SETTINGS: RouterSettings = {
   historyWindow: 20,
   maxJudgeIterations: 2,
   routingTimeoutMs: 60_000,
+  routingMaxRetries: 2,
+  routingRetryBaseDelayMs: 250,
   qaTimeoutMs: 300_000,
   totalTimeoutMs: 300_000,
   inactivityTimeoutMs: 60_000,

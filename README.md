@@ -54,6 +54,11 @@ router.dispose();
 | `runSubAgent(opts)`     | Spin up an isolated Pi agent with MCP servers + middleware attached.    |
 | `onUserInput(cb)`       | Invoked for every user input; return `{cancel:true}` to swallow.        |
 | `onBeforeMessage(cb)`   | Invoked before a typed message is sent; used for the Q&A fallback.      |
+| `registerAutocomplete` (optional) | Declare the `/skill:` completion trigger (Pi ≥ 0.79.1).       |
+| `onCompaction` (optional) | Compaction events driving the adaptive overflow ceiling (Pi ≥ 0.79.10). |
+| `getMode` (optional)    | Current host mode, inherited as a hint by the sub-agent (Pi ≥ 0.78.1).  |
+| `getSystemPromptOptions` (optional) | System prompt inspection; only `customInstructions` carry over (Pi ≥ 0.78.1). |
+| `setSessionName` / `getSessionName` (optional) | Session renamed to `skill:<name>` per run; user-picked names are never clobbered (Pi ≥ 0.78.0). |
 | `resolveWorkspacePath`  | Resolve paths inside the active workspace (for `.pi/skills/...`).       |
 | `resolveHomePath`       | Resolve paths inside `~` (for `~/.pi/agent/skills/...`).                |
 | `log` (optional)        | Structured logger.                                                      |
@@ -70,11 +75,14 @@ All knobs live under `auggieRouter` in `.pi/settings.json`:
     "historyWindow": 20,
     "maxJudgeIterations": 2,
     "routingTimeoutMs": 60000,
+    "routingMaxRetries": 2,
+    "routingRetryBaseDelayMs": 250,
     "qaTimeoutMs": 300000,
     "totalTimeoutMs": 300000,
     "inactivityTimeoutMs": 60000,
     "subAgentTemperature": 0.0,
-    "overflowCeilingBytes": 25000
+    "overflowCeilingBytes": 25000,
+    "overflowFloorBytes": 5000
   }
 }
 ```
@@ -87,6 +95,14 @@ All knobs live under `auggieRouter` in `.pi/settings.json`:
 Defaults match the values shown above. Only `defaultProvider` is expected to
 change in normal use; everything else is opinionated for a reason.
 
+> **Routing retries:** thrown `callLLM` errors (network blips, 429/5xx) are
+> retried up to `routingMaxRetries` times with exponential backoff
+> (`routingRetryBaseDelayMs`, doubling per attempt). Timeouts are never
+> retried — they already consumed `routingTimeoutMs` and degrade into the
+> Judge fallback / Q&A path instead. If your host already retries at
+> provider level (Pi ≥ 0.76.0 `retry.provider.maxRetries`), set
+> `routingMaxRetries` to `0` so attempts don't multiply.
+
 ### Skill `model:` translation
 
 The `model:` field in a skill's frontmatter is translated through
@@ -97,7 +113,17 @@ The `model:` field in a skill's frontmatter is translated through
 | `claude-3-7-sonnet`                       | `openrouter/anthropic/claude-3-7-sonnet`           |
 | `anthropic/claude-3-5-haiku`              | `openrouter/anthropic/claude-3-5-haiku`            |
 | `openrouter/anthropic/claude-3-5-sonnet`  | _(unchanged — already fully qualified)_            |
-| _(missing)_                               | `openrouter/anthropic/claude-3-5-sonnet` (fallback)|
+| _(missing)_                               | `openrouter/anthropic/claude-sonnet-5` (fallback)  |
+
+## Skill autocomplete
+
+On hosts that implement the optional `registerAutocomplete` method (Pi ≥
+0.79.1 natural extension autocomplete), the router declares `/skill:` as a
+completion trigger. While the user types the skill name, the router scans
+`.pi/skills/*/SKILL.md` and `~/.pi/agent/skills/*/SKILL.md` (workspace
+shadows home, same precedence as execution) and suggests matching names.
+A frontmatter `description:` in the `SKILL.md` is surfaced next to each
+suggestion. Hosts without autocomplete support are unaffected.
 
 ## Execution flow
 
@@ -117,13 +143,28 @@ The `model:` field in a skill's frontmatter is translated through
    exit aborts with `[System Error]: Cannot execute skill. Augment daemon is
    offline or unauthenticated.`
 6. **Sub-agent execution** — the input editor is locked, a `[System]: ⚙️ Executing …`
-   marker is posted, and an isolated Pi sub-agent runs at `temperature: 0.0`
-   with the `auggie` MCP attached over stdio. The sub-agent's prompt is
+   marker is posted, and on hosts exposing `setSessionName` the session is
+   renamed to `skill:<name>` (only if the session is unnamed or carries a
+   name this router set earlier — a user-picked name always survives).
+   An isolated Pi sub-agent runs at `temperature: 0.0`
+   with the `auggie` MCP attached over stdio. On hosts exposing the
+   Pi ≥ 0.78.1 helpers, a host-context block is inserted between the skill
+   instructions and the auggie directive: the current mode (`getMode`) as a
+   behavioural hint, and the host's `customInstructions` (capped at 4 000
+   chars) so tone/convention preferences carry into the skill run. The
+   host's base system prompt is inspected but never inlined. The prompt is
    appended with: *"To gather context, you MUST strictly use the MCP tool
    named `codebase-retrieval`. Do not attempt to run auggie in the terminal."*
 7. **Overflow middleware** — every `auggie/codebase-retrieval` response over
    25 KB (configurable) is dropped and replaced with `"Result too large.
    Please refine your codebase-retrieval query to be more specific."`
+   On hosts that expose compaction events (Pi ≥ 0.79.10 `onCompaction`),
+   the ceiling is adaptive: each automatic compaction that will retry the
+   interrupted request (`reason: "threshold" | "overflow"`, `willRetry: true`)
+   halves the ceiling down to `overflowFloorBytes`, so the retried turn pulls
+   smaller payloads instead of re-triggering the same overflow. Manual
+   compactions never shrink it. The ceiling resets to the configured value
+   at the start of every skill run.
 8. **Resolution** — final sub-agent text is posted to the main thread, the
    editor is unlocked, the state machine resets to `idle`.
 
@@ -145,9 +186,11 @@ get a `[System]: Router busy` warning.
 | Routing engine          | `anthropic/claude-3-5-haiku`     | Cheap and Anthropic-aligned for routing.           |
 | History window          | 20 messages                      | Enough for context, not enough to drown the brief. |
 | Total timeout           | 300 s                            | Hard kill prevents runaway billing.                |
+| Routing retries         | 2 × (250 ms backoff, doubling)   | Survives transient provider errors; timeouts excluded. |
 | MCP inactivity timeout  | 60 s                             | Stops OpenRouter loops when a model hangs.         |
 | Sub-agent temperature   | 0.0                              | Mandatory for rigid tool usage.                    |
 | Overflow ceiling        | 25 000 B                         | Forces query refinement, not context dumping.      |
+| Overflow floor          | 5 000 B                          | Lower bound for the adaptive post-compaction ceiling. |
 
 ## Development
 

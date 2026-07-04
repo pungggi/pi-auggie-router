@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createRouter } from "../src/index.ts";
 import type {
   ChatMessage,
+  CompactionEvent,
   LLMCallOptions,
   PiHost,
   SubAgentRunOptions,
@@ -27,6 +28,21 @@ interface HarnessOpts {
    * verify that callWithTimeout's Promise.race short-circuits regardless.
    */
   ignoreSignal?: boolean;
+  /** When true the host exposes `onCompaction` (Pi >= 0.79.10). */
+  withCompaction?: boolean;
+  /** Per-call error injection: callLLM #n rejects with llmErrors[n] if set. */
+  llmErrors?: (Error | undefined)[];
+  /** When set the host exposes `getMode` (Pi >= 0.78.1 ctx.mode). */
+  mode?: string;
+  /** When set the host exposes `getSystemPromptOptions` (Pi >= 0.78.1). */
+  systemPromptOptions?: { systemPrompt?: string; customInstructions?: string };
+  /**
+   * When set the host exposes setSessionName/getSessionName, starting with
+   * this name ("" = unnamed session).
+   */
+  sessionName?: string;
+  /** When true setSessionName throws (misbehaving host). */
+  sessionNameThrows?: boolean;
 }
 
 function harness(opts: HarnessOpts) {
@@ -48,6 +64,7 @@ function harness(opts: HarnessOpts) {
 
   let inputCb: ((raw: string) => { cancel: boolean } | void) | null = null;
   let beforeCb: ((msg: string) => { cancel: boolean }) | null = null;
+  let compactionCb: ((event: CompactionEvent) => void) | null = null;
 
   let i = 0;
   const host: PiHost = {
@@ -57,7 +74,8 @@ function harness(opts: HarnessOpts) {
     getRecentMessages: () => opts.history ?? [],
     callLLM: async (o) => {
       llmCalls.push(o);
-      const t = opts.llmResponses[i] ?? "";
+      const idx = i;
+      const t = opts.llmResponses[idx] ?? "";
       i += 1;
       if (opts.llmDelayMs && opts.llmDelayMs > 0) {
         await new Promise<void>((resolve, reject) => {
@@ -70,6 +88,8 @@ function harness(opts: HarnessOpts) {
           }
         });
       }
+      const err = opts.llmErrors?.[idx];
+      if (err) throw err;
       return { text: t };
     },
     runSubAgent: async (o) => {
@@ -94,6 +114,33 @@ function harness(opts: HarnessOpts) {
     resolveHomePath: (rel) => join(home, rel),
   };
 
+  const sessionNames: string[] = [];
+  let currentSessionName = opts.sessionName ?? "";
+  if (opts.sessionName !== undefined) {
+    host.setSessionName = (name) => {
+      if (opts.sessionNameThrows) throw new Error("rename rejected");
+      sessionNames.push(name);
+      currentSessionName = name;
+    };
+    host.getSessionName = () => currentSessionName;
+  }
+
+  if (opts.mode !== undefined) {
+    host.getMode = () => opts.mode!;
+  }
+  if (opts.systemPromptOptions !== undefined) {
+    host.getSystemPromptOptions = () => opts.systemPromptOptions!;
+  }
+
+  if (opts.withCompaction) {
+    host.onCompaction = (cb) => {
+      compactionCb = cb;
+      return () => {
+        compactionCb = null;
+      };
+    };
+  }
+
   return {
     host,
     workspace,
@@ -104,6 +151,9 @@ function harness(opts: HarnessOpts) {
     subAgentCalls,
     fireInput: (raw: string) => inputCb?.(raw),
     fireBefore: (msg: string) => beforeCb?.(msg),
+    fireCompaction: (event: CompactionEvent) => compactionCb?.(event),
+    hasCompactionListener: () => compactionCb !== null,
+    sessionNames,
     cleanup: () => {
       rmSync(workspace, { recursive: true, force: true });
       rmSync(home, { recursive: true, force: true });
@@ -394,6 +444,306 @@ describe("createRouter end-to-end", () => {
       const cancelled = h.messages.find((m) => m.text.includes("Q&A timed out"));
       assert.ok(cancelled, "expected Q&A timeout cancel message");
       assert.equal(h.subAgentCalls.length, 0);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("rejects malformed settings values and keeps well-formed overrides", async () => {
+    const h = harness({
+      llmResponses: [],
+      settingsOverride: {
+        routingMaxRetries: "3", // string where a number belongs
+        qaTimeoutMs: -1, // negative
+        historyWindow: null, // null
+        defaultProvider: "   ", // blank string
+        overflowCeilingBytes: 10_000, // valid override — must survive
+      },
+    });
+    try {
+      const router = createRouter(h.host, { preflight: h.preflight });
+      const s = router.getSettings();
+      assert.equal(s.routingMaxRetries, 2, "string falls back to default");
+      assert.equal(s.qaTimeoutMs, 300_000, "negative falls back to default");
+      assert.equal(s.historyWindow, 20, "null falls back to default");
+      assert.equal(s.defaultProvider, "openrouter", "blank falls back to default");
+      assert.equal(s.overflowCeilingBytes, 10_000, "valid override is kept");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("a non-Error callLLM rejection surfaces as a real Error message", async () => {
+    const h = harness({
+      llmResponses: [],
+      // A misbehaving host rejecting with a bare string instead of an Error.
+      llmErrors: ["socket hang up" as unknown as Error],
+      settingsOverride: { routingMaxRetries: 0 },
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+      const sys = h.messages.find((m) => m.text.includes("socket hang up"));
+      assert.ok(sys, "expected the string rejection normalized into the message");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("names an unnamed session after the active skill and follows skill changes", async () => {
+    const h = harness({
+      llmResponses: [...PASSING_LLM_PAIR, ...PASSING_LLM_PAIR],
+      sessionName: "",
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      writeSkill(h.workspace, "review", "Review it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+
+      await router.trigger("/skill:demo");
+      assert.deepEqual(h.sessionNames, ["skill:demo"]);
+
+      // A name the router set itself is fair game for the next skill.
+      await router.trigger("/skill:review");
+      assert.deepEqual(h.sessionNames, ["skill:demo", "skill:review"]);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("never clobbers a session name the user chose themselves", async () => {
+    const h = harness({
+      llmResponses: [...PASSING_LLM_PAIR],
+      sessionName: "my important refactor",
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      assert.deepEqual(h.sessionNames, [], "user-picked name must survive");
+      assert.equal(h.subAgentCalls.length, 1, "skill still executes normally");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("a throwing setSessionName is logged, not fatal", async () => {
+    const h = harness({
+      llmResponses: [...PASSING_LLM_PAIR],
+      sessionName: "",
+      sessionNameThrows: true,
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      assert.equal(h.subAgentCalls.length, 1);
+      const assistant = h.messages.find((m) => m.kind === "assistant");
+      assert.equal(assistant?.text, "DONE");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("inherits host mode and custom instructions into the sub-agent prompt", async () => {
+    const h = harness({
+      llmResponses: [...PASSING_LLM_PAIR],
+      mode: "plan",
+      systemPromptOptions: {
+        systemPrompt: "HOST-BASE-PROMPT-MUST-NOT-LEAK",
+        customInstructions: "Always answer in German.",
+      },
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do the demo.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      const prompt = h.subAgentCalls[0]!.systemPrompt;
+      assert.match(prompt, /^Do the demo\./, "skill instructions stay first");
+      assert.match(prompt, /Host mode: plan/);
+      assert.match(prompt, /Always answer in German\./);
+      // The auggie directive keeps its emphasis as the final block.
+      assert.match(prompt, /codebase-retrieval[\s\S]*$/);
+      assert.ok(
+        prompt.indexOf("Host mode") < prompt.indexOf("codebase-retrieval"),
+        "host context comes before the auggie directive"
+      );
+      // The host's base prompt is inspection-only and never inlined.
+      assert.ok(!prompt.includes("HOST-BASE-PROMPT-MUST-NOT-LEAK"));
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("builds the legacy prompt on hosts without the 0.78.1 helpers", async () => {
+    const h = harness({ llmResponses: [...PASSING_LLM_PAIR] });
+    try {
+      writeSkill(h.workspace, "demo", "Do the demo.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      const prompt = h.subAgentCalls[0]!.systemPrompt;
+      assert.ok(!prompt.includes("Host mode"));
+      assert.ok(!prompt.includes("Host custom instructions"));
+      assert.match(prompt, /codebase-retrieval/);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("omits blank mode/instructions and truncates oversized instructions", async () => {
+    const h = harness({
+      llmResponses: [...PASSING_LLM_PAIR],
+      mode: "   ",
+      systemPromptOptions: { customInstructions: "x".repeat(5_000) },
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do the demo.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      const prompt = h.subAgentCalls[0]!.systemPrompt;
+      assert.ok(!prompt.includes("Host mode"), "blank mode is omitted");
+      assert.match(prompt, /\[\.\.\.truncated\]/);
+      assert.ok(prompt.length < 5_000, "instructions are bounded");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("retries a transiently failing routing call and still executes the skill", async () => {
+    // Call #0 (first Actor attempt) rejects; the retry (call #1) and the
+    // Judge call (call #2) succeed.
+    const h = harness({
+      llmResponses: ["", ...PASSING_LLM_PAIR],
+      llmErrors: [new Error("ECONNRESET")],
+      settingsOverride: { routingRetryBaseDelayMs: 5 },
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      assert.equal(h.llmCalls.length, 3, "expected 1 failed + 2 successful calls");
+      assert.equal(h.subAgentCalls.length, 1);
+      const assistant = h.messages.find((m) => m.kind === "assistant");
+      assert.equal(assistant?.text, "DONE");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("gives up after exhausting routing retries and aborts the skill", async () => {
+    const boom = new Error("upstream 503");
+    const h = harness({
+      llmResponses: [],
+      llmErrors: [boom, boom, boom],
+      settingsOverride: { routingMaxRetries: 2, routingRetryBaseDelayMs: 5 },
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      assert.equal(h.llmCalls.length, 3, "expected exactly maxRetries+1 attempts");
+      assert.equal(h.subAgentCalls.length, 0);
+      const sys = h.messages.find((m) => m.text.includes("upstream 503"));
+      assert.ok(sys, "expected the final error surfaced as a system message");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("routingMaxRetries: 0 disables retries entirely", async () => {
+    const h = harness({
+      llmResponses: [],
+      llmErrors: [new Error("boom")],
+      settingsOverride: { routingMaxRetries: 0 },
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+      assert.equal(h.llmCalls.length, 1);
+      assert.equal(h.subAgentCalls.length, 0);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("does not retry routing timeouts — they fall through to the Q&A path", async () => {
+    const h = harness({
+      llmResponses: [...PASSING_LLM_PAIR, ...PASSING_LLM_PAIR],
+      settingsOverride: {
+        routingTimeoutMs: 25,
+        qaTimeoutMs: 25,
+        routingRetryBaseDelayMs: 5,
+      },
+      llmDelayMs: 200,
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      // 2 iterations x (Actor + Judge) = 4 calls; retries would inflate this.
+      assert.equal(h.llmCalls.length, 4);
+      const ask = h.messages.find((m) => m.text.includes("Missing context for skill"));
+      assert.ok(ask, "expected the timeout to degrade into Q&A, not retries");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("lowers the overflow ceiling on retry-bound compactions and resets per run", async () => {
+    const h = harness({
+      llmResponses: [...PASSING_LLM_PAIR, ...PASSING_LLM_PAIR],
+      withCompaction: true,
+    });
+    const auggieCtx = {
+      serverName: "auggie",
+      toolName: "codebase-retrieval",
+      args: {},
+    };
+    const payload = "x".repeat(13_000); // between floor (5 000) and ceiling (25 000)
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+
+      await router.trigger("/skill:demo");
+      const mw1 = h.subAgentCalls[0]!.toolResultMiddleware!;
+      assert.deepEqual(mw1(auggieCtx, payload), { block: false });
+
+      // Overflow compaction with retry: 25 000 → 12 500. The middleware
+      // reads the live ceiling, so the already-captured mw1 now blocks.
+      h.fireCompaction({ reason: "overflow", willRetry: true });
+      assert.equal(mw1(auggieCtx, payload).block, true);
+
+      // Manual and non-retry compactions never shrink the ceiling further.
+      h.fireCompaction({ reason: "manual", willRetry: true });
+      h.fireCompaction({ reason: "threshold", willRetry: false });
+      assert.equal(mw1(auggieCtx, "x".repeat(12_000)).block, false);
+
+      // A fresh skill run starts back at the configured ceiling.
+      await router.trigger("/skill:demo");
+      const mw2 = h.subAgentCalls[1]!.toolResultMiddleware!;
+      assert.deepEqual(mw2(auggieCtx, payload), { block: false });
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("dispose() unsubscribes the compaction listener", async () => {
+    const h = harness({ llmResponses: [], withCompaction: true });
+    try {
+      const router = createRouter(h.host, { preflight: h.preflight });
+      assert.equal(h.hasCompactionListener(), true);
+      router.dispose();
+      assert.equal(h.hasCompactionListener(), false);
     } finally {
       h.cleanup();
     }

@@ -178,6 +178,50 @@ async function callWithTimeout(
 }
 
 /**
+ * Retry wrapper around `callWithTimeout` for transient provider failures.
+ *
+ * Only thrown errors are retried (network blips, 429/5xx surfaced by the
+ * host). Timeouts are NOT retried: they already consumed the full
+ * `routingTimeoutMs` budget and the loop degrades gracefully to the Judge
+ * fallback / Q&A path on an empty response. Hosts that retry at provider
+ * level themselves (Pi >= 0.76.0 `retry.provider.maxRetries`) should run
+ * with `routingMaxRetries: 0` to avoid multiplying attempts.
+ */
+async function callWithRetry(
+  host: PiHost,
+  settings: RouterSettings,
+  opts: Parameters<PiHost["callLLM"]>[0]
+): Promise<{ text: string; timedOut: boolean }> {
+  // Belt-and-braces on top of loadSettings' sanitization: a non-finite or
+  // fractional retry count must never yield zero attempts or an unbounded
+  // loop, even if settings arrive from a future code path that skips it.
+  const configured = settings.routingMaxRetries;
+  const retries = Number.isFinite(configured) ? Math.max(0, Math.floor(configured)) : 0;
+  const attempts = retries + 1;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await callWithTimeout(host, opts, settings.routingTimeoutMs);
+    } catch (err) {
+      lastErr = err;
+      if (attempt === attempts) break;
+      const delay = settings.routingRetryBaseDelayMs * 2 ** (attempt - 1);
+      host.log?.(
+        "warn",
+        `pi-auggie-router: routing call failed (attempt ${attempt}/${attempts}): ` +
+          `${(err as Error).message ?? String(err)}; retrying in ${delay}ms`
+      );
+      if (delay > 0) {
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+  }
+  // Hosts may reject with non-Error values; normalize so callers always
+  // get a real Error with a usable message.
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
+/**
  * Run the 2-pass Actor/Judge loop. Returns the final brief + judge verdict.
  * Caller decides what to do when `passed === false` (typically: trigger Q&A).
  */
@@ -204,16 +248,12 @@ export async function runActorJudgeLoop(
   };
 
   for (let i = 1; i <= settings.maxJudgeIterations; i++) {
-    const actorRes = await callWithTimeout(
-      host,
-      {
-        model: settings.routingModel,
-        messages: buildActorMessages(skill, history, priorBrief, priorRubric),
-        temperature: 0.0,
-        responseFormat: "json",
-      },
-      settings.routingTimeoutMs
-    );
+    const actorRes = await callWithRetry(host, settings, {
+      model: settings.routingModel,
+      messages: buildActorMessages(skill, history, priorBrief, priorRubric),
+      temperature: 0.0,
+      responseFormat: "json",
+    });
 
     let brief: SkillBrief;
     try {
@@ -229,16 +269,12 @@ export async function runActorJudgeLoop(
       };
     }
 
-    const judgeRes = await callWithTimeout(
-      host,
-      {
-        model: settings.routingModel,
-        messages: buildJudgeMessages(skill, history, brief),
-        temperature: 0.0,
-        responseFormat: "json",
-      },
-      settings.routingTimeoutMs
-    );
+    const judgeRes = await callWithRetry(host, settings, {
+      model: settings.routingModel,
+      messages: buildJudgeMessages(skill, history, brief),
+      temperature: 0.0,
+      responseFormat: "json",
+    });
 
     let rubric: JudgeRubric;
     try {

@@ -25,8 +25,8 @@ describe("mapModel", () => {
   });
 
   it("returns the configured fallback when model is missing", () => {
-    assert.equal(mapModel(undefined, "openrouter"), "openrouter/anthropic/claude-3-5-sonnet");
-    assert.equal(mapModel("   ", "openrouter"), "openrouter/anthropic/claude-3-5-sonnet");
+    assert.equal(mapModel(undefined, "openrouter"), "openrouter/anthropic/claude-sonnet-5");
+    assert.equal(mapModel("   ", "openrouter"), "openrouter/anthropic/claude-sonnet-5");
   });
 
   it("strips trailing slashes from the provider", () => {

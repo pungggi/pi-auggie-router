@@ -17,7 +17,7 @@ export function mapModel(rawModel: string | undefined, defaultProvider: string):
     throw new Error("mapModel: defaultProvider is empty");
   }
 
-  const fallback = `${provider}/anthropic/claude-3-5-sonnet`;
+  const fallback = `${provider}/anthropic/claude-sonnet-5`;
   if (!rawModel || !rawModel.trim()) {
     return fallback;
   }

@@ -157,6 +157,18 @@ describe("suggestSkills", () => {
     }
   });
 
+  it("preserves leading whitespace in the replacement value", () => {
+    const h = makeHost();
+    try {
+      writeSkill(h.workspace, ".pi/skills", "demo", "Do it.");
+      const suggestions = suggestSkills(h.host, "  /skill:de");
+      assert.equal(suggestions.length, 1);
+      assert.equal(suggestions[0]!.value, "  /skill:demo ");
+    } finally {
+      h.cleanup();
+    }
+  });
+
   it("ignores input that doesn't start with the trigger", () => {
     const h = makeHost();
     try {

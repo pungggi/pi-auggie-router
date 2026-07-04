@@ -18,7 +18,47 @@ export const DEFAULT_SETTINGS: RouterSettings = {
 };
 
 interface PiSettingsFile {
-  auggieRouter?: Partial<RouterSettings>;
+  auggieRouter?: Record<string, unknown>;
+}
+
+/**
+ * Merge user overrides onto the defaults, keeping only values of the right
+ * shape: strings must be non-blank, numbers must be finite and >= 0 (0 keeps
+ * its "disabled" meaning for the timeout knobs). Anything else — strings
+ * where numbers belong, negatives, null — falls back to the default so a
+ * typo in `.pi/settings.json` can't produce NaN arithmetic or unbounded
+ * retry loops downstream.
+ */
+function sanitizeSettings(
+  overrides: Record<string, unknown>,
+  host: PiHost
+): RouterSettings {
+  const out: Record<string, string | number> = { ...DEFAULT_SETTINGS };
+  const rejected: string[] = [];
+  for (const [key, def] of Object.entries(DEFAULT_SETTINGS)) {
+    if (!(key in overrides)) continue;
+    const v = overrides[key];
+    if (typeof def === "number") {
+      if (typeof v === "number" && Number.isFinite(v) && v >= 0) {
+        out[key] = v;
+      } else {
+        rejected.push(key);
+      }
+    } else {
+      if (typeof v === "string" && v.trim()) {
+        out[key] = v;
+      } else {
+        rejected.push(key);
+      }
+    }
+  }
+  if (rejected.length) {
+    host.log?.(
+      "warn",
+      `pi-auggie-router: ignored invalid auggieRouter settings (${rejected.join(", ")}); using defaults for those.`
+    );
+  }
+  return out as unknown as RouterSettings;
 }
 
 export function loadSettings(host: PiHost): RouterSettings {
@@ -28,7 +68,7 @@ export function loadSettings(host: PiHost): RouterSettings {
   }
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as PiSettingsFile;
-    return { ...DEFAULT_SETTINGS, ...(parsed.auggieRouter ?? {}) };
+    return sanitizeSettings(parsed.auggieRouter ?? {}, host);
   } catch (err) {
     host.log?.(
       "warn",

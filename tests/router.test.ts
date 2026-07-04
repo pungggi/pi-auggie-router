@@ -449,6 +449,48 @@ describe("createRouter end-to-end", () => {
     }
   });
 
+  it("rejects malformed settings values and keeps well-formed overrides", async () => {
+    const h = harness({
+      llmResponses: [],
+      settingsOverride: {
+        routingMaxRetries: "3", // string where a number belongs
+        qaTimeoutMs: -1, // negative
+        historyWindow: null, // null
+        defaultProvider: "   ", // blank string
+        overflowCeilingBytes: 10_000, // valid override — must survive
+      },
+    });
+    try {
+      const router = createRouter(h.host, { preflight: h.preflight });
+      const s = router.getSettings();
+      assert.equal(s.routingMaxRetries, 2, "string falls back to default");
+      assert.equal(s.qaTimeoutMs, 300_000, "negative falls back to default");
+      assert.equal(s.historyWindow, 20, "null falls back to default");
+      assert.equal(s.defaultProvider, "openrouter", "blank falls back to default");
+      assert.equal(s.overflowCeilingBytes, 10_000, "valid override is kept");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("a non-Error callLLM rejection surfaces as a real Error message", async () => {
+    const h = harness({
+      llmResponses: [],
+      // A misbehaving host rejecting with a bare string instead of an Error.
+      llmErrors: ["socket hang up" as unknown as Error],
+      settingsOverride: { routingMaxRetries: 0 },
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+      const sys = h.messages.find((m) => m.text.includes("socket hang up"));
+      assert.ok(sys, "expected the string rejection normalized into the message");
+    } finally {
+      h.cleanup();
+    }
+  });
+
   it("names an unnamed session after the active skill and follows skill changes", async () => {
     const h = harness({
       llmResponses: [...PASSING_LLM_PAIR, ...PASSING_LLM_PAIR],

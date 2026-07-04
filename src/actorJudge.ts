@@ -192,7 +192,12 @@ async function callWithRetry(
   settings: RouterSettings,
   opts: Parameters<PiHost["callLLM"]>[0]
 ): Promise<{ text: string; timedOut: boolean }> {
-  const attempts = Math.max(0, settings.routingMaxRetries) + 1;
+  // Belt-and-braces on top of loadSettings' sanitization: a non-finite or
+  // fractional retry count must never yield zero attempts or an unbounded
+  // loop, even if settings arrive from a future code path that skips it.
+  const configured = settings.routingMaxRetries;
+  const retries = Number.isFinite(configured) ? Math.max(0, Math.floor(configured)) : 0;
+  const attempts = retries + 1;
   let lastErr: unknown;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
@@ -211,7 +216,9 @@ async function callWithRetry(
       }
     }
   }
-  throw lastErr;
+  // Hosts may reject with non-Error values; normalize so callers always
+  // get a real Error with a usable message.
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
 /**

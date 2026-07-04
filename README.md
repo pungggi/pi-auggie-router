@@ -56,6 +56,8 @@ router.dispose();
 | `onBeforeMessage(cb)`   | Invoked before a typed message is sent; used for the Q&A fallback.      |
 | `registerAutocomplete` (optional) | Declare the `/skill:` completion trigger (Pi ≥ 0.79.1).       |
 | `onCompaction` (optional) | Compaction events driving the adaptive overflow ceiling (Pi ≥ 0.79.10). |
+| `getMode` (optional)    | Current host mode, inherited as a hint by the sub-agent (Pi ≥ 0.78.1).  |
+| `getSystemPromptOptions` (optional) | System prompt inspection; only `customInstructions` carry over (Pi ≥ 0.78.1). |
 | `resolveWorkspacePath`  | Resolve paths inside the active workspace (for `.pi/skills/...`).       |
 | `resolveHomePath`       | Resolve paths inside `~` (for `~/.pi/agent/skills/...`).                |
 | `log` (optional)        | Structured logger.                                                      |
@@ -141,7 +143,12 @@ suggestion. Hosts without autocomplete support are unaffected.
    offline or unauthenticated.`
 6. **Sub-agent execution** — the input editor is locked, a `[System]: ⚙️ Executing …`
    marker is posted, and an isolated Pi sub-agent runs at `temperature: 0.0`
-   with the `auggie` MCP attached over stdio. The sub-agent's prompt is
+   with the `auggie` MCP attached over stdio. On hosts exposing the
+   Pi ≥ 0.78.1 helpers, a host-context block is inserted between the skill
+   instructions and the auggie directive: the current mode (`getMode`) as a
+   behavioural hint, and the host's `customInstructions` (capped at 4 000
+   chars) so tone/convention preferences carry into the skill run. The
+   host's base system prompt is inspected but never inlined. The prompt is
    appended with: *"To gather context, you MUST strictly use the MCP tool
    named `codebase-retrieval`. Do not attempt to run auggie in the terminal."*
 7. **Overflow middleware** — every `auggie/codebase-retrieval` response over

@@ -32,6 +32,10 @@ interface HarnessOpts {
   withCompaction?: boolean;
   /** Per-call error injection: callLLM #n rejects with llmErrors[n] if set. */
   llmErrors?: (Error | undefined)[];
+  /** When set the host exposes `getMode` (Pi >= 0.78.1 ctx.mode). */
+  mode?: string;
+  /** When set the host exposes `getSystemPromptOptions` (Pi >= 0.78.1). */
+  systemPromptOptions?: { systemPrompt?: string; customInstructions?: string };
 }
 
 function harness(opts: HarnessOpts) {
@@ -102,6 +106,13 @@ function harness(opts: HarnessOpts) {
     resolveWorkspacePath: (rel) => join(workspace, rel),
     resolveHomePath: (rel) => join(home, rel),
   };
+
+  if (opts.mode !== undefined) {
+    host.getMode = () => opts.mode!;
+  }
+  if (opts.systemPromptOptions !== undefined) {
+    host.getSystemPromptOptions = () => opts.systemPromptOptions!;
+  }
 
   if (opts.withCompaction) {
     host.onCompaction = (cb) => {
@@ -414,6 +425,73 @@ describe("createRouter end-to-end", () => {
       const cancelled = h.messages.find((m) => m.text.includes("Q&A timed out"));
       assert.ok(cancelled, "expected Q&A timeout cancel message");
       assert.equal(h.subAgentCalls.length, 0);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("inherits host mode and custom instructions into the sub-agent prompt", async () => {
+    const h = harness({
+      llmResponses: [...PASSING_LLM_PAIR],
+      mode: "plan",
+      systemPromptOptions: {
+        systemPrompt: "HOST-BASE-PROMPT-MUST-NOT-LEAK",
+        customInstructions: "Always answer in German.",
+      },
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do the demo.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      const prompt = h.subAgentCalls[0]!.systemPrompt;
+      assert.match(prompt, /^Do the demo\./, "skill instructions stay first");
+      assert.match(prompt, /Host mode: plan/);
+      assert.match(prompt, /Always answer in German\./);
+      // The auggie directive keeps its emphasis as the final block.
+      assert.match(prompt, /codebase-retrieval[\s\S]*$/);
+      assert.ok(
+        prompt.indexOf("Host mode") < prompt.indexOf("codebase-retrieval"),
+        "host context comes before the auggie directive"
+      );
+      // The host's base prompt is inspection-only and never inlined.
+      assert.ok(!prompt.includes("HOST-BASE-PROMPT-MUST-NOT-LEAK"));
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("builds the legacy prompt on hosts without the 0.78.1 helpers", async () => {
+    const h = harness({ llmResponses: [...PASSING_LLM_PAIR] });
+    try {
+      writeSkill(h.workspace, "demo", "Do the demo.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      const prompt = h.subAgentCalls[0]!.systemPrompt;
+      assert.ok(!prompt.includes("Host mode"));
+      assert.ok(!prompt.includes("Host custom instructions"));
+      assert.match(prompt, /codebase-retrieval/);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("omits blank mode/instructions and truncates oversized instructions", async () => {
+    const h = harness({
+      llmResponses: [...PASSING_LLM_PAIR],
+      mode: "   ",
+      systemPromptOptions: { customInstructions: "x".repeat(5_000) },
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do the demo.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      const prompt = h.subAgentCalls[0]!.systemPrompt;
+      assert.ok(!prompt.includes("Host mode"), "blank mode is omitted");
+      assert.match(prompt, /\[\.\.\.truncated\]/);
+      assert.ok(prompt.length < 5_000, "instructions are bounded");
     } finally {
       h.cleanup();
     }

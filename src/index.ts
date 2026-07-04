@@ -271,6 +271,7 @@ export type {
   SkillBrief,
   SubAgentResult,
   SubAgentRunOptions,
+  SystemPromptOptions,
   ToolCallContext,
   ToolResultMiddleware,
   UIInputInterceptor,

@@ -76,6 +76,24 @@ export interface AutocompleteSuggestion {
 }
 
 /**
+ * Snapshot of the host's main-thread system prompt configuration, matching
+ * Pi's `ctx.getSystemPromptOptions()` (Pi >= 0.78.1).
+ */
+export interface SystemPromptOptions {
+  /**
+   * The host's base system prompt. Inspection only — the router never
+   * inlines it into the sub-agent prompt (it would drown the skill).
+   */
+  systemPrompt?: string;
+  /**
+   * User/project custom instructions the host appends to its own prompt.
+   * These ARE inherited by the sub-agent so tone/convention preferences
+   * carry over into skill runs.
+   */
+  customInstructions?: string;
+}
+
+/**
  * Compaction notification from the host, matching Pi's extension compaction
  * events (Pi >= 0.79.10 `reason` / `willRetry` metadata).
  */
@@ -128,6 +146,16 @@ export interface PiHost {
    * compaction metadata keep the static overflow ceiling.
    */
   onCompaction?: (cb: (event: CompactionEvent) => void) => () => void;
+  /**
+   * Current host mode (Pi >= 0.78.1 `ctx.mode`), e.g. "code" or "plan".
+   * Optional: without it the sub-agent prompt carries no mode hint.
+   */
+  getMode?: () => string;
+  /**
+   * Inspect the host's system prompt configuration (Pi >= 0.78.1
+   * `ctx.getSystemPromptOptions()`).
+   */
+  getSystemPromptOptions?: () => SystemPromptOptions;
   /** Resolve a path inside the active workspace (for `.pi/` lookups). */
   resolveWorkspacePath: (relative: string) => string;
   /** Resolve a path inside the user's home dir (`~/.pi/...`). */

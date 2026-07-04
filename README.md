@@ -58,6 +58,7 @@ router.dispose();
 | `onCompaction` (optional) | Compaction events driving the adaptive overflow ceiling (Pi ≥ 0.79.10). |
 | `getMode` (optional)    | Current host mode, inherited as a hint by the sub-agent (Pi ≥ 0.78.1).  |
 | `getSystemPromptOptions` (optional) | System prompt inspection; only `customInstructions` carry over (Pi ≥ 0.78.1). |
+| `setSessionName` / `getSessionName` (optional) | Session renamed to `skill:<name>` per run; user-picked names are never clobbered (Pi ≥ 0.78.0). |
 | `resolveWorkspacePath`  | Resolve paths inside the active workspace (for `.pi/skills/...`).       |
 | `resolveHomePath`       | Resolve paths inside `~` (for `~/.pi/agent/skills/...`).                |
 | `log` (optional)        | Structured logger.                                                      |
@@ -142,7 +143,10 @@ suggestion. Hosts without autocomplete support are unaffected.
    exit aborts with `[System Error]: Cannot execute skill. Augment daemon is
    offline or unauthenticated.`
 6. **Sub-agent execution** — the input editor is locked, a `[System]: ⚙️ Executing …`
-   marker is posted, and an isolated Pi sub-agent runs at `temperature: 0.0`
+   marker is posted, and on hosts exposing `setSessionName` the session is
+   renamed to `skill:<name>` (only if the session is unnamed or carries a
+   name this router set earlier — a user-picked name always survives).
+   An isolated Pi sub-agent runs at `temperature: 0.0`
    with the `auggie` MCP attached over stdio. On hosts exposing the
    Pi ≥ 0.78.1 helpers, a host-context block is inserted between the skill
    instructions and the auggie directive: the current mode (`getMode`) as a

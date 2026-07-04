@@ -36,6 +36,13 @@ interface HarnessOpts {
   mode?: string;
   /** When set the host exposes `getSystemPromptOptions` (Pi >= 0.78.1). */
   systemPromptOptions?: { systemPrompt?: string; customInstructions?: string };
+  /**
+   * When set the host exposes setSessionName/getSessionName, starting with
+   * this name ("" = unnamed session).
+   */
+  sessionName?: string;
+  /** When true setSessionName throws (misbehaving host). */
+  sessionNameThrows?: boolean;
 }
 
 function harness(opts: HarnessOpts) {
@@ -107,6 +114,17 @@ function harness(opts: HarnessOpts) {
     resolveHomePath: (rel) => join(home, rel),
   };
 
+  const sessionNames: string[] = [];
+  let currentSessionName = opts.sessionName ?? "";
+  if (opts.sessionName !== undefined) {
+    host.setSessionName = (name) => {
+      if (opts.sessionNameThrows) throw new Error("rename rejected");
+      sessionNames.push(name);
+      currentSessionName = name;
+    };
+    host.getSessionName = () => currentSessionName;
+  }
+
   if (opts.mode !== undefined) {
     host.getMode = () => opts.mode!;
   }
@@ -135,6 +153,7 @@ function harness(opts: HarnessOpts) {
     fireBefore: (msg: string) => beforeCb?.(msg),
     fireCompaction: (event: CompactionEvent) => compactionCb?.(event),
     hasCompactionListener: () => compactionCb !== null,
+    sessionNames,
     cleanup: () => {
       rmSync(workspace, { recursive: true, force: true });
       rmSync(home, { recursive: true, force: true });
@@ -425,6 +444,63 @@ describe("createRouter end-to-end", () => {
       const cancelled = h.messages.find((m) => m.text.includes("Q&A timed out"));
       assert.ok(cancelled, "expected Q&A timeout cancel message");
       assert.equal(h.subAgentCalls.length, 0);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("names an unnamed session after the active skill and follows skill changes", async () => {
+    const h = harness({
+      llmResponses: [...PASSING_LLM_PAIR, ...PASSING_LLM_PAIR],
+      sessionName: "",
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      writeSkill(h.workspace, "review", "Review it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+
+      await router.trigger("/skill:demo");
+      assert.deepEqual(h.sessionNames, ["skill:demo"]);
+
+      // A name the router set itself is fair game for the next skill.
+      await router.trigger("/skill:review");
+      assert.deepEqual(h.sessionNames, ["skill:demo", "skill:review"]);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("never clobbers a session name the user chose themselves", async () => {
+    const h = harness({
+      llmResponses: [...PASSING_LLM_PAIR],
+      sessionName: "my important refactor",
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      assert.deepEqual(h.sessionNames, [], "user-picked name must survive");
+      assert.equal(h.subAgentCalls.length, 1, "skill still executes normally");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("a throwing setSessionName is logged, not fatal", async () => {
+    const h = harness({
+      llmResponses: [...PASSING_LLM_PAIR],
+      sessionName: "",
+      sessionNameThrows: true,
+    });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:demo");
+
+      assert.equal(h.subAgentCalls.length, 1);
+      const assistant = h.messages.find((m) => m.kind === "assistant");
+      assert.equal(assistant?.text, "DONE");
     } finally {
       h.cleanup();
     }

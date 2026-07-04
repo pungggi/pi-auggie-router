@@ -156,6 +156,16 @@ export interface PiHost {
    * `ctx.getSystemPromptOptions()`).
    */
   getSystemPromptOptions?: () => SystemPromptOptions;
+  /**
+   * Rename the current session (Pi >= 0.78.0 named sessions; metadata
+   * updates propagate per Pi >= 0.80.3). Optional and cosmetic.
+   */
+  setSessionName?: (name: string) => void;
+  /**
+   * Read the current session name. Used to avoid clobbering a name the
+   * user chose themselves; without it the router renames unconditionally.
+   */
+  getSessionName?: () => string;
   /** Resolve a path inside the active workspace (for `.pi/` lookups). */
   resolveWorkspacePath: (relative: string) => string;
   /** Resolve a path inside the user's home dir (`~/.pi/...`). */

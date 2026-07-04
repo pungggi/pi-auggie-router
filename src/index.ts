@@ -48,6 +48,24 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
     host.log?.(level, msg);
   };
 
+  // Name the session after the active skill (Pi >= 0.78.0 named sessions).
+  // A name the user picked themselves is never clobbered — only unnamed
+  // sessions and names this router set earlier are replaced. Cosmetic:
+  // failures are logged, never surfaced.
+  let lastRouterSessionName: string | null = null;
+  function maybeNameSession(skillName: string): void {
+    if (!host.setSessionName) return;
+    try {
+      const current = host.getSessionName?.()?.trim() ?? "";
+      if (current && current !== lastRouterSessionName) return;
+      const name = `skill:${skillName}`;
+      host.setSessionName(name);
+      lastRouterSessionName = name;
+    } catch (err) {
+      log("warn", `pi-auggie-router: failed to rename session: ${(err as Error).message}`);
+    }
+  }
+
   async function handleSkillCommand(skillName: string): Promise<void> {
     if (state.isBusy()) {
       host.postSystemMessage(
@@ -110,6 +128,7 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
 
       state.beginExecution();
       overflowCeiling.reset();
+      maybeNameSession(skill.name);
       host.setInputLocked(true, LOCK_REASON);
       host.postSystemMessage(
         `[System]: ⚙️ Executing /skill:${skill.name} (Auggie semantic retrieval running...)`

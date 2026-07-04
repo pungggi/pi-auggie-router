@@ -54,6 +54,7 @@ router.dispose();
 | `runSubAgent(opts)`     | Spin up an isolated Pi agent with MCP servers + middleware attached.    |
 | `onUserInput(cb)`       | Invoked for every user input; return `{cancel:true}` to swallow.        |
 | `onBeforeMessage(cb)`   | Invoked before a typed message is sent; used for the Q&A fallback.      |
+| `registerAutocomplete` (optional) | Declare the `/skill:` completion trigger (Pi ≥ 0.79.1).       |
 | `resolveWorkspacePath`  | Resolve paths inside the active workspace (for `.pi/skills/...`).       |
 | `resolveHomePath`       | Resolve paths inside `~` (for `~/.pi/agent/skills/...`).                |
 | `log` (optional)        | Structured logger.                                                      |
@@ -97,7 +98,17 @@ The `model:` field in a skill's frontmatter is translated through
 | `claude-3-7-sonnet`                       | `openrouter/anthropic/claude-3-7-sonnet`           |
 | `anthropic/claude-3-5-haiku`              | `openrouter/anthropic/claude-3-5-haiku`            |
 | `openrouter/anthropic/claude-3-5-sonnet`  | _(unchanged — already fully qualified)_            |
-| _(missing)_                               | `openrouter/anthropic/claude-3-5-sonnet` (fallback)|
+| _(missing)_                               | `openrouter/anthropic/claude-sonnet-5` (fallback)  |
+
+## Skill autocomplete
+
+On hosts that implement the optional `registerAutocomplete` method (Pi ≥
+0.79.1 natural extension autocomplete), the router declares `/skill:` as a
+completion trigger. While the user types the skill name, the router scans
+`.pi/skills/*/SKILL.md` and `~/.pi/agent/skills/*/SKILL.md` (workspace
+shadows home, same precedence as execution) and suggests matching names.
+A frontmatter `description:` in the `SKILL.md` is surfaced next to each
+suggestion. Hosts without autocomplete support are unaffected.
 
 ## Execution flow
 

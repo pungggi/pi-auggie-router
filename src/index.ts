@@ -1,5 +1,6 @@
 import { runActorJudgeLoop } from "./actorJudge.js";
 import { runAuggieStatus } from "./auggie.js";
+import { makeSkillAutocomplete } from "./autocomplete.js";
 import { DEFAULT_SETTINGS, loadSettings } from "./config.js";
 import { mapModel } from "./modelMapper.js";
 import {
@@ -197,10 +198,15 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
     return { cancel: true };
   });
 
+  // Declare the `/skill:` trigger for native autocomplete (Pi >= 0.79.1).
+  // Hosts without `registerAutocomplete` skip this and keep working.
+  const offAutocomplete = host.registerAutocomplete?.(makeSkillAutocomplete(host));
+
   return {
     dispose: () => {
       offInput();
       offBefore();
+      offAutocomplete?.();
       state.reset();
     },
     getSettings: () => ({ ...settings }),
@@ -219,13 +225,18 @@ export {
   locateSkillFile,
   parseSkillFile,
   loadSkill,
+  listSkills,
   SkillNotFoundError,
   InvalidSkillNameError,
 } from "./parser.js";
+export type { SkillListing } from "./parser.js";
+export { makeSkillAutocomplete, suggestSkills, SKILL_TRIGGER } from "./autocomplete.js";
 export { makeOverflowMiddleware, runAuggieStatus, AUGGIE_DIRECTIVE, AUGGIE_MCP_NAME, AUGGIE_TOOL_NAME } from "./auggie.js";
 export { runActorJudgeLoop } from "./actorJudge.js";
 export { RouterState } from "./state.js";
 export type {
+  AutocompleteSpec,
+  AutocompleteSuggestion,
   ChatMessage,
   JudgeRubric,
   LLMCallOptions,

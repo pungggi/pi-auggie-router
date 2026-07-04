@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import matter from "gray-matter";
 import type { ParsedSkill, PiHost } from "./types.js";
@@ -73,4 +73,58 @@ export function parseSkillFile(skillName: string, filePath: string): ParsedSkill
 
 export function loadSkill(host: PiHost, skillName: string): ParsedSkill {
   return parseSkillFile(skillName, locateSkillFile(host, skillName));
+}
+
+export interface SkillListing {
+  name: string;
+  filePath: string;
+  /** Frontmatter `description:`, if present. */
+  description?: string;
+  source: "workspace" | "home";
+}
+
+function scanSkillRoot(root: string, source: SkillListing["source"]): SkillListing[] {
+  let entries: string[];
+  try {
+    entries = readdirSync(root);
+  } catch {
+    return [];
+  }
+  const out: SkillListing[] = [];
+  for (const name of entries) {
+    if (!VALID_SKILL_NAME.test(name)) continue;
+    const filePath = join(root, name, "SKILL.md");
+    if (!existsSync(filePath)) continue;
+    let description: string | undefined;
+    try {
+      const fm = matter(readFileSync(filePath, "utf8")).data as Record<string, unknown>;
+      if (typeof fm.description === "string" && fm.description.trim()) {
+        description = fm.description.trim();
+      }
+    } catch {
+      // A malformed SKILL.md must not break completion; `loadSkill` surfaces
+      // the real parse error if the user actually runs the skill.
+    }
+    out.push({ name, filePath, description, source });
+  }
+  return out;
+}
+
+/**
+ * Enumerate every skill visible to the router, in the same precedence order
+ * as `locateSkillFile`: workspace skills shadow home skills of the same name.
+ */
+export function listSkills(host: PiHost): SkillListing[] {
+  const all = [
+    ...scanSkillRoot(host.resolveWorkspacePath(join(".pi", "skills")), "workspace"),
+    ...scanSkillRoot(host.resolveHomePath(join(".pi", "agent", "skills")), "home"),
+  ];
+  const seen = new Set<string>();
+  const out: SkillListing[] = [];
+  for (const s of all) {
+    if (seen.has(s.name)) continue;
+    seen.add(s.name);
+    out.push(s);
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
 }

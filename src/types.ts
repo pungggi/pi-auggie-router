@@ -66,6 +66,26 @@ export interface UIInputInterceptor {
   (message: string): { cancel: boolean };
 }
 
+export interface AutocompleteSuggestion {
+  /** Full replacement text for the input line, e.g. `/skill:demo `. */
+  value: string;
+  /** Display label, e.g. the bare skill name. */
+  label: string;
+  /** Frontmatter `description:` of the skill, if present. */
+  description?: string;
+}
+
+/**
+ * Declares a completion trigger to the host, matching Pi's natural
+ * extension autocomplete (Pi >= 0.79.1 character/prefix declarations).
+ */
+export interface AutocompleteSpec {
+  /** Literal prefix that activates completion, e.g. `/skill:`. */
+  trigger: string;
+  /** Called with the current input line while the trigger is active. */
+  getSuggestions: (input: string) => AutocompleteSuggestion[];
+}
+
 /**
  * The minimal surface area pi-auggie-router needs from the Pi host.
  * Hosts inject this via `createRouter(host)`.
@@ -87,6 +107,11 @@ export interface PiHost {
   onBeforeMessage: (cb: (msg: string) => { cancel: boolean }) => () => void;
   /** Register an input hook scoped to the `/skill:` regex prefix. */
   onUserInput: (cb: (raw: string) => { cancel: boolean } | void) => () => void;
+  /**
+   * Declare a native autocomplete trigger (Pi >= 0.79.1). Optional: hosts
+   * without autocomplete support simply skip registration.
+   */
+  registerAutocomplete?: (spec: AutocompleteSpec) => () => void;
   /** Resolve a path inside the active workspace (for `.pi/` lookups). */
   resolveWorkspacePath: (relative: string) => string;
   /** Resolve a path inside the user's home dir (`~/.pi/...`). */

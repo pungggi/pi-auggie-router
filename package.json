@@ -19,7 +19,8 @@
     "README.md",
     "GETTING-STARTED.md",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "docs"
   ],
   "pi": {
     "extensions": [
@@ -39,7 +40,7 @@
     "clean": "rimraf dist",
     "test": "node --test --test-reporter=spec --import tsx tests/**/*.test.ts",
     "lint": "tsc --noEmit -p tsconfig.json",
-    "prepublishOnly": "npm run clean && npm run build"
+    "prepublishOnly": "node -e \"if(!process.env.CI)throw new Error('publish via release.yml CI: push a v* tag')\" && npm run clean && npm run build"
   },
   "keywords": [
     "pi",
@@ -77,5 +78,9 @@
     "rimraf": "5.0.5",
     "tsx": "4.21.0",
     "typescript": "5.8.3"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }

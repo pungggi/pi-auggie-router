@@ -19,7 +19,9 @@ import {
 } from "./traceReport.js";
 import {
   InvalidSkillNameError,
+  isLocalExecution,
   loadSkill,
+  matchLocalSkillCommand,
   matchSkillCommand,
   SkillNotFoundError,
 } from "./parser.js";
@@ -140,25 +142,17 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
     host.log?.(level, msg);
   };
 
-  async function handleSkillCommand(skillName: string): Promise<void> {
+  /**
+   * Execute an already-loaded, classified-as-routed skill through the
+   * Actor/Judge → sub-agent pipeline. Owns the `state` machine and the
+   * input lock. Reached from the chat input intercept (routed `/skill:`)
+   * and from `handleSkillCommand` (programmatic trigger / space-form).
+   */
+  async function executeRoutedSkill(skill: ParsedSkill): Promise<void> {
     if (state.isBusy()) {
       host.postSystemMessage(
         `[System]: Router busy (${state.phase}). Wait for the current skill to finish.`
       );
-      return;
-    }
-
-    let skill: ParsedSkill;
-    try {
-      skill = loadSkill(host, skillName);
-    } catch (err) {
-      if (err instanceof SkillNotFoundError || err instanceof InvalidSkillNameError) {
-        host.postSystemMessage(`[System]: ${err.message}`);
-      } else {
-        host.postSystemMessage(
-          `[System]: Failed to load skill "${skillName}": ${(err as Error).message}`
-        );
-      }
       return;
     }
 
@@ -482,6 +476,31 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
     });
   }
 
+  /**
+   * Programmatic entry: load + route. Backs `router.trigger()` and the
+   * extension's space-form `/skill <name>` command. Unlike the chat input
+   * intercept, a not-found skill here surfaces an error directly (there is
+   * no Pi built-in fallback on the programmatic path). Classification is
+   * intentionally NOT consulted: space-form/trigger is the explicit
+   * "force route" surface per `docs/HITL-skill-passthrough.md` §13 Q4.
+   */
+  async function handleSkillCommand(skillName: string): Promise<void> {
+    let skill: ParsedSkill;
+    try {
+      skill = loadSkill(host, skillName);
+    } catch (err) {
+      if (err instanceof SkillNotFoundError || err instanceof InvalidSkillNameError) {
+        host.postSystemMessage(`[System]: ${err.message}`);
+      } else {
+        host.postSystemMessage(
+          `[System]: Failed to load skill "${skillName}": ${(err as Error).message}`
+        );
+      }
+      return;
+    }
+    await executeRoutedSkill(skill);
+  }
+
   // --- Hook wiring ---------------------------------------------------------
 
   // Intercept `/skill:trace-report <name>` and `/skill:trace-view <filename>`
@@ -549,6 +568,13 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
   }
 
   // Intercept `/skill:<name>` before Pi's default handler runs.
+  //
+  // Dual-mode classification (docs/HITL-skill-passthrough.md):
+  //   [A] `/skill-local:` / `/skill!:`        → never claim (Pi in-session)
+  //       `/skill:trace-view|trace-report`    → observability (cancel)
+  //       `/skill:<name>` not found            → passthrough (Pi may resolve)
+  //       `/skill:<name>` opted out (frontmatter) → passthrough (Pi in-session)
+  //       `/skill:<name>` routed (default)     → claim + execute
   const offInput = host.onUserInput((raw) => {
     // Check for trace-view sub-command first (most specific).
     const viewMatch = TRACE_VIEW_REGEX.exec(raw.trimStart());
@@ -564,10 +590,48 @@ export function createRouter(host: PiHost, opts: CreateRouterOptions = {}): Rout
       return { cancel: true };
     }
 
+    // [A] Explicit in-session escape hatch — never claim it. Returning
+    // without `cancel` lets Pi's built-in skill loader run `SKILL.md` in
+    // the main agent session (HITL / interactive skills).
+    if (matchLocalSkillCommand(raw)) return;
+
     const match = matchSkillCommand(raw);
     if (!match) return;
-    // Fire-and-forget; the state machine + UI lock provide back-pressure.
-    void handleSkillCommand(match.name);
+
+    let skill: ParsedSkill;
+    try {
+      skill = loadSkill(host, match.name);
+    } catch (err) {
+      if (err instanceof SkillNotFoundError) {
+        // [B] R3: router cannot resolve it from its known roots. Do NOT
+        // swallow — let Pi try `settings.skills` and other discovery
+        // (e.g. a skill that lives only under `~/.claude/skills`).
+        log(
+          "debug",
+          `pi-auggie-router: /skill:${match.name} not found in router roots; passing through to Pi`
+        );
+        return; // no cancel → passthrough
+      }
+      // Invalid name / unreadable file: surface and swallow (no Pi path
+      // can recover from these).
+      host.postSystemMessage(`[System]: ${(err as Error).message}`);
+      return { cancel: true };
+    }
+
+    // [C] HITL / manual skill opted out via frontmatter. Do not cancel;
+    // Pi's in-context loader runs it in the main session.
+    if (isLocalExecution(skill)) {
+      if (settings.skillPassthrough.surfaceLocalHandoff) {
+        host.postSystemMessage(
+          `[System]: /skill:${skill.name} → in-session (HITL). Router skipped.`
+        );
+      }
+      return; // no cancel
+    }
+
+    // Routed (AFK / coding) — claim it and execute. Fire-and-forget; the
+    // state machine + UI lock provide back-pressure.
+    void executeRoutedSkill(skill);
     return { cancel: true };
   });
 
@@ -603,6 +667,7 @@ export {
   DEFAULT_OUTPUT_SANITIZER,
   DEFAULT_PARALLEL_SUBAGENTS,
   DEFAULT_SETTINGS,
+  DEFAULT_SKILL_PASSTHROUGH,
 } from "./config.js";
 export { DEFAULT_TRACE_OBSERVABILITY } from "./config.js";
 export { chooseContextBudget } from "./contextBudget.js";
@@ -611,9 +676,12 @@ export { assembleHistory } from "./historyAssembler.js";
 export { mapModel, DisallowedProviderError } from "./modelMapper.js";
 export {
   matchSkillCommand,
+  matchLocalSkillCommand,
+  LOCAL_SKILL_COMMAND_REGEX,
   locateSkillFile,
   parseSkillFile,
   loadSkill,
+  isLocalExecution,
   SkillNotFoundError,
   InvalidSkillNameError,
 } from "./parser.js";
@@ -697,7 +765,9 @@ export type {
   PromptInjectionSettings,
   RouterSettings,
   SkillBrief,
+  SkillExecutionMode,
   SkillModelPolicy,
+  SkillPassthroughSettings,
   SubAgentResult,
   SubAgentRunOptions,
   SubtaskBrief,

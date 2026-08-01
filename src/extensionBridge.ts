@@ -50,6 +50,48 @@ function cleanupTemp(filePath: string): void {
 }
 
 /**
+ * Resolve a leading `~` to the user's home directory. Mirrors pi's own
+ * skill-path resolution for entries like `~/.claude/skills`.
+ */
+function resolveTilde(p: string, home: string): string {
+  if (p === "~") return home;
+  if (p.startsWith("~/") || p.startsWith("~\\")) {
+    return join(home, p.slice(2));
+  }
+  return p;
+}
+
+/**
+ * Read pi's `skills` setting from global + project settings.json so the
+ * router can locate skills under user-configured roots (e.g.
+ * `~/.claude/skills`) the same way pi discovers them. Best-effort: any
+ * read/parse error is swallowed (returns whatever was collected).
+ */
+function readPiSkillRoots(home: string): string[] {
+  const roots = new Set<string>();
+  const files = [
+    join(home, ".pi", "agent", "settings.json"), // global
+    join(process.cwd(), ".pi", "settings.json"),  // project
+  ];
+  for (const file of files) {
+    try {
+      if (!existsSync(file)) continue;
+      const parsed = JSON.parse(readFileSync(file, "utf8")) as { skills?: unknown };
+      if (Array.isArray(parsed.skills)) {
+        for (const entry of parsed.skills) {
+          if (typeof entry === "string" && entry.trim()) {
+            roots.add(resolveTilde(entry.trim(), home));
+          }
+        }
+      }
+    } catch {
+      // ignore unreadable/invalid settings — degrade to the two hard-coded dirs
+    }
+  }
+  return [...roots];
+}
+
+/**
  * Spawn a short-lived `pi` child process for an LLM call.
  * Uses `--mode json` for structured output and `--no-session` for isolation.
  */
@@ -340,6 +382,10 @@ export function createExtensionBridge(
 
     resolveHomePath(relative: string): string {
       return join(homedir(), relative);
+    },
+
+    listSkillRoots(): string[] {
+      return readPiSkillRoots(homedir());
     },
 
     log(level, msg) {

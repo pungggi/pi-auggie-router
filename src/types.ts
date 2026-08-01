@@ -91,6 +91,13 @@ export interface PiHost {
   resolveWorkspacePath: (relative: string) => string;
   /** Resolve a path inside the user's home dir (`~/.pi/...`). */
   resolveHomePath: (relative: string) => string;
+  /**
+   * Optional: enumerate extra skill roots the host knows about (e.g. pi's
+   * `settings.skills` entries like `~/.claude/skills`). The router searches
+   * these after its two hard-coded dirs so it can locate and classify
+   * skills the same way Pi does. Absent → only the two hard-coded dirs.
+   */
+  listSkillRoots?: () => string[];
   /** Optional logger; falls back to no-op. */
   log?: (level: "debug" | "info" | "warn" | "error", msg: string) => void;
 }
@@ -289,6 +296,13 @@ export interface RouterSettings {
   /** Trace observability — classification, degradation alerts, and reporting. Enabled by default. */
   traceObservability: TraceObservabilitySettings;
   /**
+   * Dual-mode skill invocation: passthrough for HITL/in-session skills so
+   * Pi's built-in skill loader runs them, while keeping `/skill:<name>`
+   * router delegation for AFK/coding skills. See
+   * `docs/HITL-skill-passthrough.md`.
+   */
+  skillPassthrough: SkillPassthroughSettings;
+  /**
    * Auto-inject a versioned system-prompt block on every agent turn so the
    * main agent follows the router's delegation conventions (slash-command
    * syntax, no pre-loading of files, no re-doing sub-agent work, etc.).
@@ -307,6 +321,26 @@ export interface PromptInjectionSettings {
    * follows its native behavior.
    */
   enabled: boolean;
+}
+
+/**
+ * Dual-mode skill invocation settings.
+ *
+ * The router classifies each `/skill:<name>` as either **routed** (AFK /
+ * coding → isolated sub-agent) or **in-session** (HITL / manual → Pi's
+ * built-in loader runs `SKILL.md` in the main agent context). In-session
+ * skills are never claimed by the router's input intercept; they fall
+ * through to Pi untouched. See `docs/HITL-skill-passthrough.md`.
+ */
+export interface SkillPassthroughSettings {
+  /**
+   * Emit a one-line `[System]: … in-session (HITL). Router skipped.`
+   * marker when a `/skill:<name>` is handed off to Pi in-session because
+   * the skill opted out via frontmatter. Set `false` to silence it.
+   * The marker is never emitted for the explicit `/skill-local:` /
+   * `/skill!:` escape hatch or for not-found passthrough.
+   */
+  surfaceLocalHandoff: boolean;
 }
 
 export type ExecutionRoutingPreference =
@@ -340,6 +374,8 @@ export interface ExecutionRoute {
   reason: string;
 }
 
+export type SkillExecutionMode = "in-context" | "subagent";
+
 export interface ParsedSkill {
   name: string;
   filePath: string;
@@ -347,6 +383,19 @@ export interface ParsedSkill {
   rawModel: string | undefined;
   /** Markdown body after frontmatter. */
   instructions: string;
+  /**
+   * Explicit frontmatter `execution:` value (`in-context` | `subagent`).
+   * Highest-precedence opt-in/out signal for router vs in-session hosting.
+   */
+  execution: SkillExecutionMode | undefined;
+  /** Raw YAML frontmatter `router:` boolean, if present. */
+  router: boolean | undefined;
+  /**
+   * Raw YAML frontmatter `disable-model-invocation:` boolean, if present.
+   * Agent Skills standard field; treated as a local/HITL signal by the
+   * router unless overridden by `execution: subagent`.
+   */
+  disableModelInvocation: boolean | undefined;
 }
 
 export interface SkillBrief {

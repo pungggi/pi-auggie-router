@@ -27,6 +27,8 @@ interface HarnessOpts {
    * verify that callWithTimeout's Promise.race short-circuits regardless.
    */
   ignoreSignal?: boolean;
+  /** Extra skill roots exposed via host.listSkillRoots() (discovery parity). */
+  skillRoots?: string[];
 }
 
 function harness(opts: HarnessOpts) {
@@ -93,6 +95,7 @@ function harness(opts: HarnessOpts) {
     },
     resolveWorkspacePath: (rel) => join(workspace, rel),
     resolveHomePath: (rel) => join(home, rel),
+    ...(opts.skillRoots ? { listSkillRoots: () => opts.skillRoots! } : {}),
     log: (level, msg) => logs.push({ level, msg }),
   };
 
@@ -963,6 +966,222 @@ describe("createRouter end-to-end", () => {
       assert.equal(data.overflowCeilingBytes, 33_000);
     } finally {
       h.cleanup();
+    }
+  });
+});
+
+describe("dual-mode skill invocation (HITL passthrough)", () => {
+  it("[A] /skill-local: never cancels → Pi in-session loader runs it", () => {
+    const h = harness({ llmResponses: [...PASSING_LLM_PAIR] });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      createRouter(h.host, { preflight: h.preflight });
+
+      // Both escape-hatch spellings pass through (no cancel, no execution).
+      assert.equal(h.fireInput("/skill-local:demo"), undefined);
+      assert.equal(h.fireInput("/skill!:demo do something"), undefined);
+
+      // Nothing was posted and no sub-agent ran.
+      assert.equal(h.subAgentCalls.length, 0);
+      assert.equal(h.messages.length, 0);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("[B] /skill:<unknown> does NOT hard-cancel — passthrough to Pi", () => {
+    const h = harness({ llmResponses: [] });
+    try {
+      createRouter(h.host, { preflight: h.preflight });
+
+      // Skill is not in any router-visible root. Router must NOT swallow it
+      // so Pi's built-in loader can still try settings.skills etc.
+      const result = h.fireInput("/skill:setup-matt-pocock-skills");
+      assert.equal(result, undefined, "expected passthrough (no cancel)");
+
+      // No "not found" system message, no sub-agent.
+      assert.equal(h.messages.length, 0);
+      assert.equal(h.subAgentCalls.length, 0);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("[C] /skill:<name> with disable-model-invocation: true → in-session (no sub-agent)", () => {
+    const h = harness({ llmResponses: [...PASSING_LLM_PAIR] });
+    try {
+      writeSkill(
+        h.workspace,
+        "grilling",
+        "---\ndisable-model-invocation: true\n---\nAsk one question at a time."
+      );
+      createRouter(h.host, { preflight: h.preflight });
+
+      // Skill is found but opts out → router steps aside.
+      const result = h.fireInput("/skill:grilling stress-test my plan");
+      assert.equal(result, undefined, "expected passthrough (no cancel)");
+
+      // Optional one-line handoff marker is surfaced (default on).
+      const marker = h.messages.find((m) =>
+        m.text.includes("in-session (HITL)")
+      );
+      assert.ok(marker, "expected HITL handoff marker");
+      assert.equal(h.subAgentCalls.length, 0);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("[C] execution: subagent forces routing even with disable-model-invocation: true", () => {
+    const h = harness({ llmResponses: [...PASSING_LLM_PAIR] });
+    try {
+      writeSkill(
+        h.workspace,
+        "dangerous",
+        "---\ndisable-model-invocation: true\nexecution: subagent\n---\nRouted anyway."
+      );
+      createRouter(h.host, { preflight: h.preflight });
+
+      // Explicit `execution: subagent` override wins over the
+      // disable-model-invocation signal → the skill is CLAIMED (routed),
+      // not passed through as local. fireInput captures the decision
+      // synchronously; the fire-and-forget execution runs afterwards.
+      const result = h.fireInput("/skill:dangerous do the thing");
+      assert.deepEqual(result, { cancel: true });
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("[C] surfaceLocalHandoff (default true) posts the HITL marker; false silences it", () => {
+    // Default: marker is posted on local handoff.
+    const h1 = harness({ llmResponses: [...PASSING_LLM_PAIR] });
+    try {
+      writeSkill(h1.workspace, "grilling", "---\nrouter: false\n---\nInteractive.");
+      createRouter(h1.host, { preflight: h1.preflight });
+      assert.equal(h1.fireInput("/skill:grilling"), undefined);
+      assert.ok(
+        h1.messages.find((m) => m.text.includes("in-session (HITL)")),
+        "default should surface the handoff marker"
+      );
+    } finally {
+      h1.cleanup();
+    }
+
+    // Opt out of the marker via settings.
+    const h2 = harness({
+      llmResponses: [...PASSING_LLM_PAIR],
+      settingsOverride: { skillPassthrough: { surfaceLocalHandoff: false } },
+    });
+    try {
+      writeSkill(h2.workspace, "grilling", "---\nrouter: false\n---\nInteractive.");
+      createRouter(h2.host, { preflight: h2.preflight });
+      assert.equal(h2.fireInput("/skill:grilling"), undefined);
+      assert.equal(
+        h2.messages.find((m) => m.text.includes("in-session (HITL)")),
+        undefined,
+        "surfaceLocalHandoff:false should silence the marker"
+      );
+      assert.equal(h2.subAgentCalls.length, 0);
+    } finally {
+      h2.cleanup();
+    }
+  });
+
+  it("[routed] /skill:<name> with no opt-out is claimed (routed)", () => {
+    // Classification decision only — the full execution pipeline is
+    // covered by the existing "routes /skill: through Actor/Judge" test.
+    const h = harness({ llmResponses: [...PASSING_LLM_PAIR] });
+    try {
+      writeSkill(h.workspace, "demo", "Do it.");
+      createRouter(h.host, { preflight: h.preflight });
+      const result = h.fireInput("/skill:demo do something");
+      assert.deepEqual(result, { cancel: true });
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("mutual exclusion: routed path cancels; local path does not double-execute", () => {
+    const h = harness({ llmResponses: [...PASSING_LLM_PAIR] });
+    try {
+      writeSkill(
+        h.workspace,
+        "demo",
+        "---\ndisable-model-invocation: true\n---\nInteractive."
+      );
+      createRouter(h.host, { preflight: h.preflight });
+
+      // Local handoff: no cancel, no execution, marker posted.
+      const local = h.fireInput("/skill:demo");
+      assert.equal(local, undefined);
+      assert.equal(h.subAgentCalls.length, 0);
+
+      // Explicit escape hatch on the same skill: also no cancel.
+      const escaped = h.fireInput("/skill-local:demo");
+      assert.equal(escaped, undefined);
+      assert.equal(h.subAgentCalls.length, 0);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("trigger() still surfaces a not-found error (no Pi fallback on programmatic path)", async () => {
+    const h = harness({ llmResponses: [] });
+    try {
+      const router = createRouter(h.host, { preflight: h.preflight });
+      await router.trigger("/skill:does-not-exist");
+      const sys = h.messages.find((m) =>
+        m.text.includes('Skill "does-not-exist" not found')
+      );
+      assert.ok(sys, "trigger should surface not-found directly");
+      assert.equal(h.subAgentCalls.length, 0);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("discovery parity: skill found only via listSkillRoots routes when no opt-out", async () => {
+    const extraRoot = mkdtempSync(join(tmpdir(), "pi-root-"));
+    try {
+      mkdirSync(join(extraRoot, "claudeskill"), { recursive: true });
+      writeFileSync(join(extraRoot, "claudeskill", "SKILL.md"), "A routable skill.");
+
+      const h = harness({ llmResponses: [...PASSING_LLM_PAIR], skillRoots: [extraRoot] });
+      try {
+        const router = createRouter(h.host, { preflight: h.preflight });
+        // trigger → loadSkill → found via listSkillRoots → executed. If
+        // discovery failed, loadSkill would throw and subAgentCalls stays 0.
+        await router.trigger("/skill:claudeskill");
+        assert.equal(h.subAgentCalls.length, 1);
+      } finally {
+        h.cleanup();
+      }
+    } finally {
+      rmSync(extraRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("discovery parity: skill found only via listSkillRoots with opt-out → in-session", () => {
+    const extraRoot = mkdtempSync(join(tmpdir(), "pi-root2-"));
+    try {
+      mkdirSync(join(extraRoot, "hitlskill"), { recursive: true });
+      writeFileSync(
+        join(extraRoot, "hitlskill", "SKILL.md"),
+        "---\ndisable-model-invocation: true\n---\nInteractive."
+      );
+
+      const h = harness({ llmResponses: [...PASSING_LLM_PAIR], skillRoots: [extraRoot] });
+      try {
+        createRouter(h.host, { preflight: h.preflight });
+        const result = h.fireInput("/skill:hitlskill");
+        assert.equal(result, undefined, "expected passthrough");
+        assert.equal(h.subAgentCalls.length, 0);
+      } finally {
+        h.cleanup();
+      }
+    } finally {
+      rmSync(extraRoot, { recursive: true, force: true });
     }
   });
 });

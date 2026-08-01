@@ -36,11 +36,21 @@ import { join } from "node:path";
 export const AGENT_PROMPT_BLOCK = `## Delegating to skills (pi-auggie-router)
 
 You have access to specialized sub-agents ("skills") registered as Pi
-commands. Each skill is a focused role (e.g. \`refactor\`, \`test\`,
-\`explain\`) backed by a \`SKILL.md\` file and isolated from your main
-context. Skills retrieve workspace context semantically through the
-Augment \`codebase-retrieval\` MCP tool — they do not read raw files
-into context.
+commands. Each skill is a focused role backed by a \`SKILL.md\` file.
+Skills come in two flavours, and they run in different places:
+
+- **Routed** skills (AFK / coding: \`refactor\`, \`test\`, \`explain\`,
+  \`research\`, …) run in an **isolated sub-agent**. They retrieve
+  workspace context semantically through the Augment
+  \`codebase-retrieval\` MCP tool — they do not read raw files into
+  context. The router owns them: it runs a 2-pass Actor/Judge brief loop,
+  picks the execution model, and sanitizes the output.
+- **In-session** skills (HITL / manual: \`wayfinder\`, \`grilling\`,
+  \`setup-*\`, \`domain-modeling\`, \`prototype\`, \`grill-me\`, …) run
+  in **this** session. Pi loads their \`SKILL.md\` into your context and
+  you drive them interactively — multi-turn Q&A with the human, reading
+  companion files next to \`SKILL.md\`, recording decisions in the live
+  chat.
 
 ### When to delegate to a skill
 
@@ -56,30 +66,46 @@ do" matches \`explain\`; "add coverage for this module" matches \`test\`.
 
 If no skill fits, do the work inline as usual.
 
-### Correct invocation
+### Skill invocation (two modes)
 
-The router intercepts **slash-command form with a space**:
+**1. Routed (AFK / coding) — the router owns it.** Both forms work and
+are equivalent; the colon form is the canonical user syntax, the
+space form is the agent-delegation syntax:
 
     /skill <name> <task description>
+    /skill:<name> <task description>
 
-The first argument is the skill name; everything after is the task.
-Examples:
+Spawns an isolated sub-agent (Auggie retrieval, sanitized answer).
+Use for refactor, test, explain, research, and similar bounded tasks
+with a clear deliverable.
 
     /skill refactor Clean up src/utils/auth.ts — extract helpers, keep public API
     /skill test Add unit tests for the new discount tiers in src/services/billing/calculator.ts
     /skill explain src/services/billing/calculator.ts
 
+**2. In-session (HITL / manual) — you own it.** The router steps aside
+and Pi loads \`SKILL.md\` into THIS session; you then follow it
+interactively. Use the explicit escape hatch, or rely on the skill's
+frontmatter opt-out (\`disable-model-invocation: true\`, \`router: false\`,
+or \`execution: in-context\`):
+
+    /skill-local:<name> …
+    /skill!:<name> …        (same thing)
+    /skill:<name>           (when the skill opts out via frontmatter)
+
+Use for wayfinder, grilling, setup-*, domain-modeling, prototype,
+grill-me, and any skill that needs multi-turn human answers, companion
+files next to \`SKILL.md\`, or decisions recorded in the live chat.
+
 ### Hard rules
 
-- **Never** use the colon form \`/skill:refactor\` or \`/skill:refactor ...\`.
-  The colon form is not intercepted by the extension bridge; it falls
-  through to you as plain text and is treated as a normal message.
-  If you see \`/skill:\` in your own output, treat it as a bug and
-  rewrite as \`/skill <name>\`.
-- **Never** read the target file into your own context before delegating.
-  The sub-agent retrieves semantically; pre-loading defeats the point
-  and wastes tokens. Pass only the file path and intent.
-- **Never** re-retrieve or re-execute the skill's work after the
+- **Never** read the target file into your own context before a
+  **routed** delegation. The sub-agent retrieves semantically;
+  pre-loading defeats the point and wastes tokens. Pass only the file
+  path and intent. (For an **in-session** skill, you SHOULD read
+  \`SKILL.md\` and its relative companions — that is how those skills
+  work.)
+- **Never** re-retrieve or re-execute a routed skill's work after the
   sub-agent returns. The result is already synthesized and tool traces
   are stripped. Treat the returned message as the final answer.
 - **Never** invoke the interactive skill picker (\`/skill\` with no
@@ -88,6 +114,9 @@ Examples:
 - **Never** invoke \`/skill:trace-report\` or \`/skill:trace-view\` on the
   user's behalf. Those are observability commands the user runs
   manually.
+- **Never** delegate an in-session (HITL) skill to the routed
+  sub-agent path. If a skill is interactive, use
+  \`/skill-local:<name>\` so it runs here, not in an isolated agent.
 
 ### Writing a good task description
 

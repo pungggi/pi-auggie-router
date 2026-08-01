@@ -6,9 +6,15 @@
 
 **New to pi-auggie-router?** Start with the [Getting Started guide](GETTING-STARTED.md) for a step-by-step walkthrough of your first skill workflow.
 
-> **Installing via `pi install` (pi.dev bridge)?** Use the slash form `/skill <name>` — the colon form `/skill:<name>` falls through unintercepted under the extension bridge. See [Getting Started](GETTING-STARTED.md#bridge-limitations).
+> **Two skill modes.** `/skill:<name>` is intercepted by the router for
+> AFK/coding skills (refactor, test, explain, research) and routed to an
+> isolated sub-agent. HITL/interactive skills (wayfinder, grilling,
+> setup-*, domain-modeling, prototype) opt out via frontmatter (or the
+> explicit `/skill-local:<name>` / `/skill!:<name>` escape hatch) and run
+> in-session via Pi's built-in loader. See
+> [Dual-mode skill invocation](#dual-mode-skill-invocation-routed-vs-in-session).
 
-`pi-auggie-router` intercepts `/skill:<name>` commands, parses the matching
+`pi-auggie-router` intercepts `/skill:<name>` commands, classifies them as
 `SKILL.md`, runs a 2-pass **Actor/Judge** brief loop on a cheap routing model,
 then dispatches to an isolated Pi sub-agent forced to retrieve workspace
 context through Augment Code's `codebase-retrieval` MCP tool. The main thread
@@ -30,6 +36,7 @@ stays clean — user sees their command and the synthesized result, nothing else
 - [Parallel sub-agent runner API](#parallel-sub-agent-runner-api)
 - [Execution trace persistence](#execution-trace-persistence)
 - [Trace Observability](#trace-observability)
+- [Dual-mode skill invocation (routed vs in-session)](#dual-mode-skill-invocation-routed-vs-in-session)
 - [Execution flow](#execution-flow)
 - [State machine](#state-machine)
 - [Operational defaults](#operational-defaults)
@@ -159,6 +166,9 @@ All knobs live under `auggieRouter` in `.pi/settings.json`:
     },
     "promptInjection": {
       "enabled": true
+    },
+    "skillPassthrough": {
+      "surfaceLocalHandoff": true
     }
   }
 }
@@ -637,14 +647,99 @@ well-known skills:
 }
 ```
 
+## Dual-mode skill invocation (routed vs in-session)
+
+Not every `/skill:` belongs in an isolated sub-agent. The router now
+classifies each invocation and either **routes** it (AFK / coding) or
+**passes it through** to Pi's built-in skill loader so it runs
+**in-session** (HITL / manual). Design: `docs/HITL-skill-passthrough.md`.
+
+### Decision table
+
+| User input | Skill | Result |
+| --- | --- | --- |
+| `/skill-local:<name>` or `/skill!:<name>` | any | **In-session** — router never claims it; Pi loads `SKILL.md` in the main agent context |
+| `/skill:<name>` | not found in any router-visible root | **Passthrough** — router does not cancel; Pi may still resolve it via `settings.skills` |
+| `/skill:<name>` | found, opted out via frontmatter | **In-session** — optional one-line `[System]: … in-session (HITL). Router skipped.` marker |
+| `/skill:<name> …` | found, no opt-out (default) | **Routed** — Actor/Judge → sub-agent (today's pipeline) |
+| `/skill:trace-report` / `/skill:trace-view` | — | unchanged observability commands |
+
+### Frontmatter contract (skill authors)
+
+A `SKILL.md` declares where it should run. Precedence (first match wins):
+
+1. `execution: in-context` → in-session
+2. `execution: subagent` → routed (override; wins even if `disable-model-invocation: true`)
+3. `router: false` → in-session; `router: true` → routed
+4. `disable-model-invocation: true` → in-session (Agent Skills standard field)
+5. *(none)* → routed (default; backwards compatible)
+
+```yaml
+---
+name: wayfinder
+description: …
+disable-model-invocation: true   # ALSO treated as in-session by the router
+# optional explicit forms (either is enough):
+router: false
+execution: in-context            # in-context | subagent
+---
+```
+
+Use `execution: subagent` for the rare skill that is both
+`disable-model-invocation: true` *and* meant for the router.
+
+### Settings
+
+```json
+{
+  "auggieRouter": {
+    "skillPassthrough": {
+      "surfaceLocalHandoff": true
+    }
+  }
+}
+```
+
+`surfaceLocalHandoff` (default `true`) emits the one-line in-session
+marker when a frontmatter-opted-out skill is handed off to Pi. The
+marker is never emitted for the explicit escape hatch or not-found
+passthrough. Set `false` to silence it.
+
+### Discovery parity
+
+The router searches for `SKILL.md` in this order: workspace
+`.pi/skills/<name>/`, then `~/.pi/agent/skills/<name>/`, then every
+root the host enumerates via `listSkillRoots()` — which the extension
+bridge populates from pi's `settings.skills` (e.g. `~/.claude/skills`).
+This lets the router *see* and *classify* skills the same way Pi lists
+them, instead of only the two hard-coded dirs.
+
+> **Migration note for `~/.claude/skills` authors:** once discovery
+> parity is in effect, a skill that lives only under `~/.claude/skills`
+> and has **no** opt-out will be routed to a sub-agent. If it is
+> interactive, add `disable-model-invocation: true` (or `router: false`,
+> or `execution: in-context`) to its frontmatter so it runs in-session.
+
+### Agent system prompt
+
+The auto-injected `## pi-auggie-router` block describes both modes so the
+main agent routes bounded coding tasks to the sub-agent and drives
+interactive skills in-session (and never delegates a HITL skill into the
+routed path). Opt out of the whole block via
+`auggieRouter.promptInjection.enabled: false`.
+
 ## Execution flow
 
 1. **Intercept** — `onUserInput` matches `/skill:trace-view`, `/skill:trace-report`,
-   then `^/skill:([a-zA-Z0-9_-]+)`, swallows
-   the input, and prevents Pi's default skill handler from running.
+   then the in-session escape hatch `/skill-local:` / `/skill!:` (never claimed),
+   then `^/skill:([a-zA-Z0-9_-]+)`. For a standard `/skill:<name>` it loads and
+   classifies the skill: **not found** or **opted out via frontmatter** → returns
+   without cancelling so Pi's built-in loader runs in-session; **routed** →
+   swallows the input and proceeds below.
 2. **Locate & parse** — looks for `SKILL.md` in `.pi/skills/<name>/` first,
-   then `~/.pi/agent/skills/<name>/`. Frontmatter is parsed with
-   `gray-matter`; only `model:` is honoured.
+   then `~/.pi/agent/skills/<name>/`, then each `host.listSkillRoots()` entry
+   (pi `settings.skills`). Frontmatter is parsed with `gray-matter`; `model:`,
+   `execution:`, `router:`, and `disable-model-invocation:` are honoured.
 3. **2-pass Actor/Judge loop** — drafts a `{userGoal, constraints, knownContext}`
    brief, scores it against a binary rubric, rewrites once if any boolean is
    `false`. Hard cap = 2 passes. When `maxJudgeIterations=0`, the Judge is

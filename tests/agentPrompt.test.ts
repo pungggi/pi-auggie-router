@@ -23,8 +23,29 @@ describe("AGENT_PROMPT_BLOCK", () => {
     assert.match(AGENT_PROMPT_BLOCK, /\/skill <name>/);
   });
 
-  it("forbids the colon form explicitly", () => {
-    assert.match(AGENT_PROMPT_BLOCK, /Never.*\/skill:refactor/);
+  it("documents both routed and in-session invocation modes", () => {
+    assert.match(AGENT_PROMPT_BLOCK, /Routed \(AFK/);
+    assert.match(AGENT_PROMPT_BLOCK, /In-session \(HITL/);
+    // Canonical user syntax (colon) is now described as intercepted,
+    // not "falls through as plain text".
+    assert.match(AGENT_PROMPT_BLOCK, /\/skill:<name>/);
+  });
+
+  it("documents the in-session escape hatch", () => {
+    assert.match(AGENT_PROMPT_BLOCK, /\/skill-local:<name>/);
+    assert.match(AGENT_PROMPT_BLOCK, /\/skill!:<name>/);
+  });
+
+  it("documents the frontmatter opt-out signals", () => {
+    assert.match(AGENT_PROMPT_BLOCK, /disable-model-invocation: true/);
+    assert.match(AGENT_PROMPT_BLOCK, /router: false/);
+    assert.match(AGENT_PROMPT_BLOCK, /execution: in-context/);
+  });
+
+  it("no longer claims the colon form falls through as plain text", () => {
+    // The old, incorrect guidance has been removed: the colon form IS
+    // intercepted today (for routed skills) and passes through for local.
+    assert.doesNotMatch(AGENT_PROMPT_BLOCK, /falls\n\s*through to you as plain text/);
   });
 
   it("documents the three bridge limitations", () => {

@@ -15,6 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - New config setting: `auggieRouter.promptInjection.enabled` (default `true`).
 
+- **Dual-mode skill invocation: routed + in-session (HITL) passthrough** — the router no longer unconditionally owns every `/skill:<name>`. It now classifies each invocation and either routes it (AFK/coding → isolated sub-agent) or steps aside so Pi's built-in loader runs it in-session (HITL/manual). This restores slash-command invocation for interactive skills (`wayfinder`, `grilling`, `setup-*`, `domain-modeling`, `prototype`, `grill-me`) without giving up the router for coding skills. Design and full decision table: `docs/HITL-skill-passthrough.md`.
+
+  - **Explicit in-session escape hatch** — `/skill-local:<name>` and `/skill!:<name>` (same handler) are never claimed by the router; Pi loads `SKILL.md` in the main agent session. New parser exports: `matchLocalSkillCommand`, `LOCAL_SKILL_COMMAND_REGEX`.
+  - **Not-found passthrough (R3)** — a `/skill:<name>` the router cannot resolve from its known roots no longer hard-cancels with a silent "not found". The input intercept returns without cancelling so Pi can still resolve it via `settings.skills` (e.g. a skill that lives only under `~/.claude/skills`).
+  - **Frontmatter classification (C)** — `SKILL.md` frontmatter now opts a skill in/out of routing. Precedence: `execution: in-context` → in-session; `execution: subagent` → routed (override, even with `disable-model-invocation: true`); `router: false`/`true`; `disable-model-invocation: true` → in-session (Agent Skills standard field); else → routed (default, backwards compatible). New parser export: `isLocalExecution`. New `ParsedSkill` fields: `execution`, `router`, `disableModelInvocation`.
+  - **Discovery parity (D)** — `locateSkillFile` now also searches every root the host enumerates via the new optional `PiHost.listSkillRoots?: () => string[]`. The extension bridge implements it by reading pi's `settings.skills` (global + project), so the router sees `~/.claude/skills` and other configured roots the same way Pi does.
+  - **Honest agent prompt** — the auto-injected `## pi-auggie-router` block now describes both modes (routed vs in-session), documents the escape hatch and frontmatter opt-out signals, and no longer makes the incorrect "colon form falls through as plain text" claim. Skills are no longer told to treat `/skill:` in their own output as a bug.
+
+- New config setting: `auggieRouter.skillPassthrough.surfaceLocalHandoff` (default `true`) — emits a one-line `[System]: … in-session (HITL). Router skipped.` marker when a frontmatter-opted-out skill is handed off to Pi. Never emitted for the explicit escape hatch or not-found passthrough. Set `false` to silence it.
+
+- New public exports: `matchLocalSkillCommand`, `LOCAL_SKILL_COMMAND_REGEX`, `isLocalExecution` (from `./parser.js`); `DEFAULT_SKILL_PASSTHROUGH` (from `./config.js`); and the `SkillExecutionMode` / `SkillPassthroughSettings` types.
+
 ### Changed
 
 - **Trace roadmap refocused** from harness self-evolution to trace observability for skill debugging. The original 5-phase auto-evolution loop (LLM proposer → benchmark validator → auto-apply) was killed after grill review: open-ended skills have no ground-truth signal to close the loop on. New direction is human-driven observability — deterministic trace classifier, degradation alerts, trace reports. PRD renamed to `docs/PRD-trace-observability.md`; in-source comments updated; new tracker in `docs/PRD-Implementation-Status.md` §12. No code behavior change.

@@ -81,7 +81,17 @@ pi update pi-auggie-router
 pi list                        # confirm version ≥ 1.2.0
 ```
 
-The `/skill:<name>` (with colon) form **does not work** through the extension bridge — it falls through to the main agent and is interpreted as plain text.
+Both invocation forms work through the extension bridge:
+
+- `/skill:<name> <task>` (colon form) — intercepted by the router, classified,
+  and either routed to a sub-agent or passed through to Pi's in-session loader
+  (see [Dual-mode skill invocation](README.md#dual-mode-skill-invocation-routed-vs-in-session)).
+- `/skill <name> <task>` (slash form) — the agent-delegation syntax; the
+  extension's `/skill` command maps it to the same routed path.
+
+For interactive / HITL skills that must run in the main session, use
+`/skill-local:<name>` (or `/skill!:<name>`) — the explicit in-session escape
+hatch.
 
 ## Bridge limitations
 
@@ -90,12 +100,16 @@ pi.dev's `ExtensionAPI` does not expose every host hook the router would use if 
 | Limitation                                | What it means                                                                                                                          | Workaround                                                                                       |
 | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | Input box not locked (`setInputLocked` no-ops) | Input box is **not** locked while a skill runs. You can keep typing — those messages will queue or interleave. No startup warning is emitted; the lock call silently no-ops. | Cosmetic only. Don't type while a skill executes.                                                |
-| `onUserInput` interception unavailable (warns only when `.on()` is missing) | The `/skill:<name>` (colon) prefix cannot be intercepted before the model sees it.                                                     | Use `/skill <name>` (slash-command form). Same router, just a different entry path.              |
+| `onUserInput` interception unavailable (warns only when `.on()` is missing) | The `/skill:<name>` (colon) prefix cannot be intercepted before the model sees it.                                                     | Use `/skill <name>` (slash-command form). Same router, just a different entry path. On a bridge that exposes `.on()`, both forms are intercepted and classified.              |
 | `onBeforeMessage` interception unavailable (warns only when `.on()` is missing) | The Q&A clarification fallback (Judge → user → resume execution) cannot capture your reply. If the Judge needs clarification, it dies. | Write skills tight enough that the Judge passes on the first try. See troubleshooting below.     |
 
 These limitations are pi.dev-side; the router itself supports all three hooks via the `PiHost` contract when mounted directly. On a bridge that exposes `.on()`, the two interception warnings don't fire (and the prompt-injection hook installs — see Step 1). If/when pi-coding-agent grows full extension hooks, the rest disappear too.
 
-The auto-injected system prompt (Step 1) softens the colon-vs-slash trap in practice: the main agent is told up front to always use `/skill <name>` and to treat any `/skill:<name>` in its own output as a bug. The limitation still exists at the bridge level — the injection just makes the agent avoid tripping it.
+On a bridge that exposes `.on()`, the router intercepts `/skill:<name>`
+and classifies it (routed vs in-session) — both the colon and slash forms
+work. The auto-injected system prompt teaches the main agent when to
+delegate (routed) vs when to drive a skill in-session (HITL), and to use
+`/skill-local:<name>` for interactive skills.
 
 ## Step 2: Configure (optional)
 

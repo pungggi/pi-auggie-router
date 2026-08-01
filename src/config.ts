@@ -15,6 +15,7 @@ import type {
   PiHost,
   RouterSettings,
   SkillModelPolicy,
+  SkillPassthroughSettings,
   TraceObservabilitySettings,
 } from "./types.js";
 
@@ -61,6 +62,10 @@ export const DEFAULT_TRACE_OBSERVABILITY: TraceObservabilitySettings = {
 
 export const DEFAULT_PROMPT_INJECTION: PromptInjectionSettings = {
   enabled: true,
+};
+
+export const DEFAULT_SKILL_PASSTHROUGH: SkillPassthroughSettings = {
+  surfaceLocalHandoff: true,
 };
 
 export const DEFAULT_PARALLEL_SUBAGENTS: ParallelSubagentsSettings = {
@@ -113,6 +118,7 @@ export const DEFAULT_SETTINGS: RouterSettings = {
   executionTrace: DEFAULT_EXECUTION_TRACE,
   traceObservability: DEFAULT_TRACE_OBSERVABILITY,
   promptInjection: DEFAULT_PROMPT_INJECTION,
+  skillPassthrough: DEFAULT_SKILL_PASSTHROUGH,
 };
 
 function cloneExecutionRouting(
@@ -175,6 +181,12 @@ function clonePromptInjection(
   return { ...s };
 }
 
+function cloneSkillPassthrough(
+  s: SkillPassthroughSettings = DEFAULT_SKILL_PASSTHROUGH
+): SkillPassthroughSettings {
+  return { ...s };
+}
+
 function cloneDefaultSettings(): RouterSettings {
   return {
     ...DEFAULT_SETTINGS,
@@ -188,6 +200,7 @@ function cloneDefaultSettings(): RouterSettings {
     executionTrace: cloneExecutionTrace(),
     traceObservability: cloneTraceObservability(),
     promptInjection: clonePromptInjection(),
+    skillPassthrough: cloneSkillPassthrough(),
   };
 }
 
@@ -226,6 +239,9 @@ function mergeSettings(validated: Partial<RouterSettings>): RouterSettings {
     promptInjection: validated.promptInjection
       ? clonePromptInjection(validated.promptInjection)
       : base.promptInjection,
+    skillPassthrough: validated.skillPassthrough
+      ? cloneSkillPassthrough(validated.skillPassthrough)
+      : base.skillPassthrough,
   };
 }
 
@@ -888,6 +904,31 @@ function validatePromptInjection(
   return out;
 }
 
+function validateSkillPassthrough(
+  raw: unknown,
+  warnings: string[]
+): SkillPassthroughSettings | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    warnings.push(
+      `auggieRouter.skillPassthrough: expected object, got ${Array.isArray(raw) ? "array" : typeof raw}`
+    );
+    return undefined;
+  }
+  const r = raw as Record<string, unknown>;
+  const out: SkillPassthroughSettings = { ...DEFAULT_SKILL_PASSTHROUGH };
+  if ("surfaceLocalHandoff" in r) {
+    try {
+      out.surfaceLocalHandoff = assertBool(
+        r.surfaceLocalHandoff,
+        "skillPassthrough.surfaceLocalHandoff"
+      );
+    } catch (e) {
+      warnings.push((e as Error).message);
+    }
+  }
+  return out;
+}
+
 /**
  * Validate a raw `auggieRouter` object from `.pi/settings.json`, returning
  * a safe `Partial<RouterSettings>`. Invalid fields are silently dropped so
@@ -1062,6 +1103,12 @@ function validateSettings(
     const validated = validatePromptInjection(raw.promptInjection, warnings);
     if (validated !== undefined) {
       out.promptInjection = validated;
+    }
+  }
+  if ("skillPassthrough" in raw) {
+    const validated = validateSkillPassthrough(raw.skillPassthrough, warnings);
+    if (validated !== undefined) {
+      out.skillPassthrough = validated;
     }
   }
 

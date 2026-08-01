@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-08-01
+
 ### Added
 
 - **Auto-injected agent system prompt** — the extension now installs a `before_agent_start` hook that appends a versioned `## pi-auggie-router` block to the system prompt on every agent turn. The block teaches the main agent how to delegate to skills (correct slash-command syntax, no pre-loading of files, no re-executing sub-agent work, the three bridge limitations, failure handling). The block content is a string constant in `src/agentPrompt.ts` and ships with the package — no user-side `APPEND_SYSTEM.md` maintenance required. Opt out via `auggieRouter.promptInjection.enabled: false` in `.pi/settings.json`. See README § *Auto-injected agent system prompt*.
@@ -30,6 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Trace roadmap refocused** from harness self-evolution to trace observability for skill debugging. The original 5-phase auto-evolution loop (LLM proposer → benchmark validator → auto-apply) was killed after grill review: open-ended skills have no ground-truth signal to close the loop on. New direction is human-driven observability — deterministic trace classifier, degradation alerts, trace reports. PRD renamed to `docs/PRD-trace-observability.md`; in-source comments updated; new tracker in `docs/PRD-Implementation-Status.md` §12. No code behavior change.
+
+### Fixed
+
+- **`npm ci` broken by lockfile drift** — the committed `package-lock.json` predated the `@earendil-works/pi-coding-agent` `^0.74.0` → `0.74.2` resolution and was missing its full transitive dependency tree, so `npm ci` failed on fresh clones. Both the CI and Release workflows run `npm ci`, so CI had been red on `main` since 2026-07-27. Regenerated the lockfile; `npm ci` + `lint` + `test` + `build` now pass.
 
 ## [1.4.0] — 2026-05-11
 

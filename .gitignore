@@ -7,3 +7,5 @@ bash.exe.stackdump
 .env.*
 coverage/
 .tsbuildinfo
+# Local pi workspace state (extension telemetry, settings, traces) — not package content.
+.pi/

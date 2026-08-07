@@ -82,6 +82,7 @@ router.dispose();
 | `onBeforeMessage(cb)`  | Invoked before a typed message is sent; used for the Q&A fallback.   |
 | `resolveWorkspacePath` | Resolve paths inside the active workspace (for `.pi/skills/...`).    |
 | `resolveHomePath`      | Resolve paths inside `~` (for `~/.pi/agent/skills/...`).             |
+| `listSkillRoots` (optional) | Enumerate extra skill roots for discovery parity (the extension bridge fills this from pi `settings.skills`, e.g. `~/.claude/skills`). |
 | `log` (optional)       | Structured logger.                                                   |
 
 ## Configuration

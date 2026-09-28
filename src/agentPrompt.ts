@@ -168,10 +168,17 @@ different skill without explaining why.
  * Minimal `before_agent_start` event shape we depend on. We type this
  * narrowly so this module has no compile-time dependency on the full
  * `@earendil-works/pi-coding-agent` package (which is a peer).
+ *
+ * Note: current pi hosts expose `systemPrompt` as a **getter-only**
+ * property on the event object (it re-renders the current prompt on
+ * read). The documented way to override the prompt is to return
+ * `{ systemPrompt }` from the handler; hosts then set
+ * `systemPromptOptions.forceSystemPrompt` for the run. Treat the field
+ * as read-only.
  */
 export interface BeforeAgentStartEventLike {
   type: "before_agent_start";
-  systemPrompt: string;
+  readonly systemPrompt: string;
 }
 
 export interface ExtensionAPI {
@@ -231,10 +238,13 @@ const INSTALLED_ON = new WeakSet<ExtensionAPI>();
  * prompt block to every system prompt. Idempotent per `pi` instance:
  * repeated calls with the same `pi` register exactly one listener.
  *
- * The handler is robust to both event-mutation and return-value
- * conventions: it mutates `event.systemPrompt` in place **and** returns
- * `{ systemPrompt }`, so the block lands regardless of which contract
- * the host honors.
+ * The handler follows the documented return-value convention — it
+ * returns `{ systemPrompt }`, which the host copies into
+ * `systemPromptOptions.forceSystemPrompt` for the run. For legacy
+ * hosts that only honored in-place event mutation (writable
+ * `systemPrompt` field), the assignment is attempted best-effort in
+ * a try/catch: current hosts define the property as getter-only, and
+ * assigning to it throws, so the mutation must never be load-bearing.
  *
  * If the supplied `pi` object does not expose `.on(...)` (older
  * extension bridge without lifecycle events), the call is a no-op and
@@ -263,8 +273,16 @@ export function installAgentPromptInjection(
   pi.on("before_agent_start", (event) => {
     if (!event || typeof event.systemPrompt !== "string") return;
     const systemPrompt = appendAgentPromptBlock(event.systemPrompt);
-    // Cover both host conventions: in-place mutation and return value.
-    event.systemPrompt = systemPrompt;
+    // Return-value contract (documented): the host copies
+    // `result.systemPrompt` into `systemPromptOptions.forceSystemPrompt`.
+    // In-place mutation only ever worked on legacy hosts with a writable
+    // field; current hosts expose `systemPrompt` as a getter-only
+    // property, so the assignment throws and must be best-effort only.
+    try {
+      (event as { systemPrompt?: string }).systemPrompt = systemPrompt;
+    } catch {
+      // getter-only event object (current pi) — return value is honored
+    }
     return { systemPrompt };
   });
   log?.("info", `pi-auggie-router v${version}: installed system-prompt injection hook`);

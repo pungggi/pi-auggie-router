@@ -173,7 +173,7 @@ describe("installAgentPromptInjection", () => {
     assert.equal(registeredEvent, "before_agent_start");
   });
 
-  it("mutates event.systemPrompt in place as well as returning it", () => {
+  it("mutates legacy writable events in place as well as returning it", () => {
     const event: BeforeAgentStartEventLike = {
       type: "before_agent_start",
       systemPrompt: "ORIGINAL",
@@ -185,11 +185,40 @@ describe("installAgentPromptInjection", () => {
       },
     };
     installAgentPromptInjection(fakePi);
-    // In-place mutation contract
+    // Legacy in-place mutation contract (hosts with a writable field)
     assert.ok(event.systemPrompt.startsWith("ORIGINAL\n\n## Delegating to skills"));
     // Return-value contract — both must agree
     assert.ok(returned);
     assert.equal(returned!.systemPrompt, event.systemPrompt);
+  });
+
+  it("does not throw when the host exposes systemPrompt as a getter-only property", () => {
+    // Regression: current pi hosts define `systemPrompt` as a getter on the
+    // before_agent_start event; the in-place assignment used to throw
+    // "Cannot set property systemPrompt of #<Object> which has only a getter"
+    // and killed the whole extension handler.
+    let backing = "ORIGINAL";
+    const event = {
+      type: "before_agent_start",
+      get systemPrompt(): string {
+        return backing;
+      },
+    } as BeforeAgentStartEventLike;
+    let returned: { systemPrompt: string } | void;
+    const fakePi: ExtensionAPI = {
+      on(_event, handler) {
+        returned = handler(event) as { systemPrompt: string };
+      },
+    };
+    assert.doesNotThrow(() => installAgentPromptInjection(fakePi));
+    // The return value carries the appended block…
+    assert.ok(returned);
+    assert.ok(returned!.systemPrompt.startsWith("ORIGINAL\n\n## Delegating to skills"));
+    assert.ok(returned!.systemPrompt.includes(AGENT_PROMPT_BLOCK));
+    // …while the getter-only property itself stays untouched (assignment
+    // is silently ignored or caught — never fatal).
+    assert.equal(event.systemPrompt, "ORIGINAL");
+    assert.equal(backing, "ORIGINAL");
   });
 
   it("is idempotent per pi instance — a second call registers no new listener", () => {

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.1] — 2026-09-28
+
+### Fixed
+
+- **`before_agent_start` crash on current Pi hosts** — the system-prompt injection hook assigned to `event.systemPrompt` in place before returning. Current Pi versions expose `systemPrompt` as a **getter-only** property on the event object, so the assignment threw `TypeError: Cannot set property systemPrompt of #<Object> which has only a getter` and killed the extension handler on every agent turn (the injected block never landed). The handler now follows the documented return-value contract — it returns `{ systemPrompt }`, which the host copies into `systemPromptOptions.forceSystemPrompt` — and attempts the legacy in-place mutation only best-effort inside a try/catch. `BeforeAgentStartEventLike.systemPrompt` is now typed `readonly`.
+
 ## [1.5.0] — 2026-08-01
 
 ### Added

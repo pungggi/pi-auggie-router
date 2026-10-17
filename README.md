@@ -1,3 +1,14 @@
+> ## ⚠️ Deprecated — October 2026
+>
+> **Status**: `pi-auggie-router` is obsolete and no longer maintained. Every npm
+> version is deprecated, and the package has been removed from the
+> [pi.dev](https://pi.dev/packages) gallery.
+>
+> **Why**: the auggie MCP integration this router wrapped was dropped in favour
+> of [`pi-context-engine`](https://www.npmjs.com/package/pi-context-engine).
+>
+> **Uninstall**: run `pi remove npm:pi-auggie-router`.
+
 # pi-auggie-router
 
 > Opinionated `/skill:` sub-agent router for the Pi framework.
